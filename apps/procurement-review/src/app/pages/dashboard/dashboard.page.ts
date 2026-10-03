@@ -20,6 +20,8 @@ import {
   selectError,
   selectLoading,
   selectPendingClarifications,
+  selectPendingIssues,
+  selectReconciliation,
   selectRole,
   selectVersions,
 } from "../../core/state/review.selectors";
@@ -78,10 +80,27 @@ export class DashboardPage {
     this.store.select(selectPendingClarifications),
     { initialValue: [] as PendingIssue[] },
   );
+  readonly reconciliation = toSignal(
+    this.store.select(selectReconciliation),
+    { initialValue: undefined },
+  );
+  readonly reconciliationIssues = toSignal(
+    this.store.select(selectPendingIssues),
+    { initialValue: [] },
+  );
+  readonly quarantineCount = computed(
+    () =>
+      this.reconciliationIssues().filter(
+        (issue) => issue.severity === "quarantined",
+      ).length,
+  );
   readonly differences = computed(() =>
     this.clauses().flatMap((clause) =>
       clause.responses
-        .filter(hasReviewDifference)
+        .filter(
+          (response) =>
+            !response.quarantined && hasReviewDifference(response),
+        )
         .map((response) => ({ clause, response })),
     ),
   );
@@ -92,8 +111,9 @@ export class DashboardPage {
         clause.responses
           .filter(
             (response) =>
-              response.status === "pending" ||
-              response.status === "clarification",
+              !response.quarantined &&
+              (response.status === "pending" ||
+                response.status === "clarification"),
           )
           .map((response) => ({ clause, response })),
       ),
@@ -104,7 +124,9 @@ export class DashboardPage {
       return 0;
     }
     const reviewed = clauses.filter((clause) =>
-      clause.responses.every((response) => response.reviews.length > 0),
+      clause.responses
+        .filter((response) => !response.quarantined)
+        .every((response) => response.reviews.length > 0),
     ).length;
     return Math.round((reviewed / clauses.length) * 100);
   });

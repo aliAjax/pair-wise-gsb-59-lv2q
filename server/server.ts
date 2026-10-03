@@ -1,11 +1,12 @@
 import { ApolloServer } from "@apollo/server";
 import { startStandaloneServer } from "@apollo/server/standalone";
+import { reviewDataStore } from "./data";
+import { runStartupRecovery } from "./bootstrap";
+import { runBatch, type RunBatchResult } from "./batches";
 import {
-  createAudit,
-  createClarificationId,
-  createOpinionId,
-  reviewDataStore,
-} from "./data";
+  reconcileDatabase,
+  resolveQuarantineIssue,
+} from "./reconciliation";
 import { typeDefs } from "./schema";
 import type {
   AssessmentInput,
@@ -19,7 +20,10 @@ import type {
 } from "./types";
 
 const getDashboard = (database: ReviewDatabase): DashboardStats => {
-  const opinionsByResponse = database.responses.map((response) => {
+  const activeResponses = database.responses.filter(
+    (response) => !response.quarantined,
+  );
+  const opinionsByResponse = activeResponses.map((response) => {
     const decisions = new Set(
       response.reviews
         .filter((review) => review.decision !== "clarification")
@@ -27,7 +31,7 @@ const getDashboard = (database: ReviewDatabase): DashboardStats => {
     );
     return decisions.size > 1;
   });
-  const proofCounts = database.responses.reduce<Record<string, number>>(
+  const proofCounts = activeResponses.reduce<Record<string, number>>(
     (counts, response) => {
       if (response.proofFingerprint) {
         counts[response.proofFingerprint] =
@@ -38,19 +42,26 @@ const getDashboard = (database: ReviewDatabase): DashboardStats => {
     {},
   );
   const activeVersion =
-    database.versions.find((version) => version.status === "draft") ??
-    database.versions[0];
+    database.versions.find(
+      (version) => version.status === "draft" && !version.quarantined,
+    ) ??
+    database.versions.find(
+      (version) => version.status === "finalized" && !version.quarantined,
+    );
+  const pendingIssues = database.reconciliation.issues.filter(
+    (issue) => !issue.resolved,
+  ).length;
 
   return {
     totalClauses: database.clauses.length,
     mandatoryCount: database.clauses.filter(
       (clause) => clause.type === "mandatory",
     ).length,
-    pendingReviews: database.responses.filter(
+    pendingReviews: activeResponses.filter(
       (response) => response.reviews.length < 2,
     ).length,
     differences: opinionsByResponse.filter(Boolean).length,
-    overdueClarifications: database.responses.reduce(
+    overdueClarifications: activeResponses.reduce(
       (count, response) =>
         count +
         response.clarifications.filter(
@@ -63,6 +74,15 @@ const getDashboard = (database: ReviewDatabase): DashboardStats => {
     activeVersion: activeVersion
       ? `${activeVersion.version} ${activeVersion.label}`
       : "未建立版本",
+    quarantinedResponses: database.responses.filter(
+      (response) => response.quarantined,
+    ).length,
+    quarantinedVersions: database.versions.filter(
+      (version) => version.quarantined,
+    ).length,
+    pendingReconciliation: pendingIssues,
+    unfinishedBatches:
+      database.reconciliation.summary.unfinishedBatches,
   };
 };
 
@@ -72,16 +92,48 @@ const requireRole = (role: ReviewRole, allowed: ReviewRole[]): void => {
   }
 };
 
+const store = reviewDataStore;
+
+const toBatchInput = (
+  input: AssessmentInput | ClarificationInput | ClarificationResponseInput | FinalizeVersionInput,
+) => ({
+  batchId: input.batchId,
+  expectedRevision: input.expectedRevision,
+});
+
+const findEntity = (
+  database: ReviewDatabase,
+  result: Extract<RunBatchResult, { outcome: "applied" | "recovered" | "duplicate" }>,
+) => {
+  if (result.entityType === "opinion") {
+    const opinion = database.responses
+      .flatMap((response) => response.reviews)
+      .find((item) => item.id === result.entityId);
+    return { opinion };
+  }
+  if (result.entityType === "clarification") {
+    const clarification = database.responses
+      .flatMap((response) => response.clarifications)
+      .find((item) => item.id === result.entityId);
+    return { clarification };
+  }
+  const version = database.versions.find(
+    (item) => item.id === result.entityId,
+  );
+  return { version };
+};
+
 const resolvers = {
   Query: {
     workspace: () => {
-      const database = reviewDataStore.snapshot();
+      const database = store.snapshot();
       return {
         ...database,
         dashboard: getDashboard(database),
       };
     },
-    dashboard: () => getDashboard(reviewDataStore.snapshot()),
+    dashboard: () => getDashboard(store.snapshot()),
+    reconciliation: () => store.snapshot().reconciliation,
   },
   Clause: {
     responses: (clause: Clause, _args: unknown, context: { database: ReviewDatabase }) =>
@@ -89,202 +141,291 @@ const resolvers = {
         (response) => response.clauseId === clause.id,
       ),
   },
+  SupplierResponse: {
+    quarantined: (response: { quarantined?: boolean }) =>
+      response.quarantined ?? false,
+    issueIds: (response: { issueIds?: string[] }) => response.issueIds ?? [],
+  },
+  ReviewVersion: {
+    quarantined: (version: { quarantined?: boolean }) =>
+      version.quarantined ?? false,
+    issueIds: (version: { issueIds?: string[] }) => version.issueIds ?? [],
+  },
+  AuditBatch: {
+    replayCount: (batch: { replayCount?: number }) => batch.replayCount ?? 0,
+  },
+  SubmitAssessmentPayload: {
+    __resolveType: (result: { outcome?: string; opinion?: unknown }) =>
+      result.opinion
+        ? "AssessmentResult"
+        : result.outcome === "conflict"
+          ? "ConcurrentChange"
+          : "QuarantineConflict",
+  },
+  RequestClarificationPayload: {
+    __resolveType: (result: { outcome?: string; clarification?: unknown }) =>
+      result.clarification
+        ? "ClarificationResult"
+        : result.outcome === "conflict"
+          ? "ConcurrentChange"
+          : "QuarantineConflict",
+  },
+  RespondClarificationPayload: {
+    __resolveType: (result: { outcome?: string; clarification?: unknown }) =>
+      result.clarification
+        ? "ClarificationResult"
+        : result.outcome === "conflict"
+          ? "ConcurrentChange"
+          : "QuarantineConflict",
+  },
+  FinalizeVersionPayload: {
+    __resolveType: (result: { outcome?: string; version?: unknown }) =>
+      result.version
+        ? "FinalizeResult"
+        : result.outcome === "conflict"
+          ? "ConcurrentChange"
+          : "QuarantineConflict",
+  },
   Mutation: {
     submitAssessment: (
       _parent: unknown,
       { input }: { input: AssessmentInput },
     ) => {
       requireRole(input.role, ["reviewer_a", "reviewer_b", "chair"]);
-      if (input.comment.trim().length < 6) {
-        throw new Error("评审意见至少需要 6 个字符。");
-      }
-      return reviewDataStore.mutate((database) => {
-        const response = database.responses.find(
-          (item) => item.id === input.responseId,
-        );
-        if (!response) {
-          throw new Error("供应商响应不存在。");
-        }
-        const clause = database.clauses.find(
-          (item) => item.id === response.clauseId,
-        );
-        if (!clause) {
-          throw new Error("对应技术条款不存在。");
-        }
-        if (input.score < 0 || input.score > clause.weight) {
-          throw new Error(`评分必须在 0 至 ${clause.weight} 之间。`);
-        }
-        if (
-          clause.type === "scoring" &&
-          input.decision === "compliant" &&
-          input.score === 0
-        ) {
-          throw new Error("评分项判定为符合时必须填写评分。");
-        }
-        const opinion = {
-          id: createOpinionId(),
-          responseId: response.id,
-          reviewer: input.reviewer.trim(),
-          role: input.role,
+      const result = runBatch(store, {
+        operation: "submit_assessment",
+        actor: input.reviewer.trim(),
+        role: input.role,
+        responseId: input.responseId,
+        ...toBatchInput(input),
+        payload: {
+          responseId: input.responseId,
           decision: input.decision,
           score: input.score,
-          comment: input.comment.trim(),
-          createdAt: new Date().toISOString(),
-        };
-        response.reviews.push(opinion);
-        response.status = input.decision;
-        response.reviewRound = Math.max(response.reviewRound, 1);
-        createAudit(
-          database,
-          opinion.reviewer,
-          "提交独立意见",
-          response.id,
-          `${clause.code} ${clause.title} 判定为 ${input.decision}，评分 ${input.score}。`,
-        );
-        return opinion;
+          comment: input.comment,
+          reviewer: input.reviewer,
+          role: input.role,
+        },
       });
+      if (result.outcome === "validation_failed") {
+        throw new Error(result.message);
+      }
+      if (result.outcome === "aborted") {
+        throw new Error(result.message);
+      }
+      if (result.outcome === "conflict" || result.outcome === "quarantined") {
+        return result;
+      }
+      const database = store.snapshot();
+      const { opinion } = findEntity(database, result) as {
+        opinion: NonNullable<ReturnType<typeof findEntity>["opinion"]>;
+      };
+      return {
+        opinion,
+        receipt: {
+          batchId: result.batch.id,
+          opSeq: result.batch.opSeq,
+          revision: result.batch.revision,
+          replayed: result.outcome !== "applied",
+          auditId: result.auditId,
+        },
+      };
     },
     requestClarification: (
       _parent: unknown,
       { input }: { input: ClarificationInput },
-    ) =>
-      reviewDataStore.mutate((database) => {
-        const response = database.responses.find(
-          (item) => item.id === input.responseId,
-        );
-        if (!response) {
-          throw new Error("供应商响应不存在。");
-        }
-        if (input.requestText.trim().length < 6) {
-          throw new Error("澄清要求至少需要 6 个字符。");
-        }
-        const requestedAt = new Date();
-        const dueAt = new Date(input.dueAt);
-        if (Number.isNaN(dueAt.getTime()) || dueAt <= requestedAt) {
-          throw new Error("澄清截止时间必须晚于当前时间。");
-        }
-        const maximumDueAt = new Date(requestedAt);
-        maximumDueAt.setDate(maximumDueAt.getDate() + 7);
-        if (dueAt > maximumDueAt) {
-          throw new Error("澄清期限不得超过 7 个自然日。");
-        }
-        const round =
-          Math.max(
-            0,
-            ...response.clarifications.map((item) => item.round),
-          ) + 1;
-        const clarification = {
-          id: createClarificationId(),
-          responseId: response.id,
-          clauseId: response.clauseId,
-          round,
-          requestText: input.requestText.trim(),
-          requestedAt: requestedAt.toISOString(),
-          dueAt: dueAt.toISOString(),
-          status: "open" as const,
-        };
-        response.clarifications.push(clarification);
-        response.status = "clarification";
-        createAudit(
-          database,
-          input.actor,
-          "发起澄清",
-          clarification.id,
-          `${response.supplierName} ${response.clauseId} 第 ${round} 轮澄清已发起。`,
-        );
-        return clarification;
-      }),
+    ) => {
+      if (input.role) {
+        requireRole(input.role, ["procurement", "chair"]);
+      }
+      const result = runBatch(store, {
+        operation: "request_clarification",
+        actor: input.actor,
+        role: input.role,
+        responseId: input.responseId,
+        ...toBatchInput(input),
+        payload: {
+          responseId: input.responseId,
+          requestText: input.requestText,
+          dueAt: input.dueAt,
+          actor: input.actor,
+        },
+      });
+      if (result.outcome === "validation_failed" || result.outcome === "aborted") {
+        throw new Error(result.message);
+      }
+      if (result.outcome === "conflict" || result.outcome === "quarantined") {
+        return result;
+      }
+      const database = store.snapshot();
+      const { clarification } = findEntity(database, result) as {
+        clarification: NonNullable<
+          ReturnType<typeof findEntity>["clarification"]
+        >;
+      };
+      return {
+        clarification,
+        receipt: {
+          batchId: result.batch.id,
+          opSeq: result.batch.opSeq,
+          revision: result.batch.revision,
+          replayed: result.outcome !== "applied",
+          auditId: result.auditId,
+        },
+      };
+    },
     respondClarification: (
       _parent: unknown,
       { input }: { input: ClarificationResponseInput },
-    ) =>
-      reviewDataStore.mutate((database) => {
-        const clarification = database.responses
-          .flatMap((response) => response.clarifications)
-          .find((item) => item.id === input.clarificationId);
-        if (!clarification) {
-          throw new Error("澄清记录不存在。");
-        }
-        if (input.responseText.trim().length < 6) {
-          throw new Error("澄清回复至少需要 6 个字符。");
-        }
-        clarification.supplierResponse = input.responseText.trim();
-        clarification.respondedAt = new Date().toISOString();
-        clarification.status = "responded";
-        const response = database.responses.find(
-          (item) => item.id === clarification.responseId,
-        );
-        if (response) {
-          response.status = "pending";
-        }
-        createAudit(
-          database,
-          input.actor,
-          "回复澄清",
-          clarification.id,
-          `第 ${clarification.round} 轮澄清已回复，等待评审员复核。`,
-        );
-        return clarification;
-      }),
+    ) => {
+      if (input.role) {
+        requireRole(input.role, ["procurement", "chair"]);
+      }
+      const responseId = store
+        .snapshot()
+        .responses.find((response) =>
+          response.clarifications.some(
+            (clarification) => clarification.id === input.clarificationId,
+          ),
+        )?.id;
+      const result = runBatch(store, {
+        operation: "respond_clarification",
+        actor: input.actor,
+        role: input.role,
+        responseId,
+        ...toBatchInput(input),
+        payload: {
+          clarificationId: input.clarificationId,
+          responseText: input.responseText,
+          actor: input.actor,
+        },
+      });
+      if (result.outcome === "validation_failed" || result.outcome === "aborted") {
+        throw new Error(result.message);
+      }
+      if (result.outcome === "conflict" || result.outcome === "quarantined") {
+        return result;
+      }
+      const database = store.snapshot();
+      const { clarification } = findEntity(database, result) as {
+        clarification: NonNullable<
+          ReturnType<typeof findEntity>["clarification"]
+        >;
+      };
+      return {
+        clarification,
+        receipt: {
+          batchId: result.batch.id,
+          opSeq: result.batch.opSeq,
+          revision: result.batch.revision,
+          replayed: result.outcome !== "applied",
+          auditId: result.auditId,
+        },
+      };
+    },
     finalizeVersion: (
       _parent: unknown,
       { input }: { input: FinalizeVersionInput },
-    ) =>
-      reviewDataStore.mutate((database) => {
-        requireRole(input.role, ["chair"]);
-        if (input.label.trim().length < 4) {
-          throw new Error("版本名称至少需要 4 个字符。");
-        }
-        const blockingClarifications = database.responses
-          .flatMap((response) => response.clarifications)
-          .filter(
-            (clarification) =>
-              clarification.status === "open" ||
-              clarification.status === "overdue",
-          );
-        if (blockingClarifications.length > 0) {
-          throw new Error(
-            `仍有 ${blockingClarifications.length} 项未完成澄清，不能定稿。`,
-          );
-        }
-        const maxVersion =
-          database.versions.reduce((maximum, version) => {
-            const numeric = Number(version.version.replace(/\D/g, ""));
-            return Number.isFinite(numeric)
-              ? Math.max(maximum, numeric)
-              : maximum;
-          }, 0) + 1;
-        database.versions.forEach((version) => {
-          version.status = "finalized";
-        });
-        const version = {
-          id: `VER-${Date.now()}`,
-          version: `V${maxVersion}`,
-          label: input.label.trim(),
-          status: "finalized" as const,
-          createdAt: new Date().toISOString(),
-          createdBy: input.actor,
-          signedBy: [input.actor],
-          clauseCount: database.clauses.length,
-          responseCount: database.responses.length,
-          contentHash: Math.random().toString(16).slice(2, 10),
+    ) => {
+      requireRole(input.role, ["chair"]);
+      const result = runBatch(store, {
+        operation: "finalize_version",
+        actor: input.actor,
+        role: input.role,
+        ...toBatchInput(input),
+        payload: {
+          label: input.label,
+          actor: input.actor,
+          role: input.role,
+        },
+      });
+      if (result.outcome === "validation_failed" || result.outcome === "aborted") {
+        throw new Error(result.message);
+      }
+      if (result.outcome === "conflict" || result.outcome === "quarantined") {
+        return result;
+      }
+      const database = store.snapshot();
+      const { version } = findEntity(database, result) as {
+        version: NonNullable<ReturnType<typeof findEntity>["version"]>;
+      };
+      return {
+        version,
+        receipt: {
+          batchId: result.batch.id,
+          opSeq: result.batch.opSeq,
+          revision: result.batch.revision,
+          replayed: result.outcome !== "applied",
+          auditId: result.auditId,
+        },
+      };
+    },
+    resolveQuarantine: (
+      _parent: unknown,
+      {
+        input,
+      }: {
+        input: {
+          issueId: string;
+          note: string;
+          actor: string;
+          role: ReviewRole;
         };
-        database.versions.unshift(version);
-        createAudit(
+      },
+    ) => {
+      requireRole(input.role, ["chair"]);
+      if (input.note.trim().length < 4) {
+        throw new Error("请填写至少 4 个字符的修复确认说明。");
+      }
+      const issue = store.mutate((database) =>
+        resolveQuarantineIssue(database, {
+          issueId: input.issueId,
+          note: input.note.trim(),
+          actor: input.actor,
+          role: input.role,
+        }),
+      );
+      const batchId = `BATCH-RESOLVE-${input.issueId}`;
+      return {
+        issue,
+        receipt: {
+          batchId,
+          opSeq: 1,
+          revision: 0,
+          replayed: false,
+          auditId: `AUD-${batchId}-1`,
+        },
+      };
+    },
+    rerunReconciliation: (
+      _parent: unknown,
+      { role }: { role: ReviewRole },
+    ) => {
+      requireRole(role, ["chair"]);
+      return store.mutate((database) => {
+        database.reconciliation = reconcileDatabase(
           database,
-          input.actor,
-          "汇总签字定稿",
-          version.id,
-          `${version.version} ${version.label} 已锁定，签署人 ${input.actor}。`,
+          {
+            replayedBatches:
+              database.reconciliation.summary.replayedBatches,
+            backfilledBatches:
+              database.reconciliation.summary.backfilledBatches,
+          },
+          database.reconciliation,
         );
-        return version;
-      }),
+        return database.reconciliation;
+      });
+    },
     resetReviewData: () => {
-      reviewDataStore.reset();
+      store.reset();
+      runStartupRecovery(reviewDataStore);
       return true;
     },
   },
 };
+
+// 启动时重放未完成批次并与当前数据对账。
+runStartupRecovery(reviewDataStore);
 
 const server = new ApolloServer({
   typeDefs,

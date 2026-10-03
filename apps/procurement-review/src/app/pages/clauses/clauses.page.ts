@@ -32,14 +32,18 @@ import {
   roleProfiles,
   type Clause,
   type ComplianceStatus,
+  type ReconciliationIssue,
   type SupplierResponse,
 } from "../../core/models/review.models";
 import { ReviewActions } from "../../core/state/review.actions";
 import {
   hasReviewDifference,
   selectClauseTree,
+  selectConflict,
+  selectIssueMap,
   selectRole,
 } from "../../core/state/review.selectors";
+import { BatchIdService } from "../../core/services/batch-id.service";
 import {
   ClarificationTagComponent,
   ClauseTypeTagComponent,
@@ -73,6 +77,7 @@ import {
 })
 export class ClausesPage {
   private readonly store = inject(Store);
+  private readonly batchIds = inject(BatchIdService);
 
   readonly clauseTree = toSignal(this.store.select(selectClauseTree), {
     initialValue: [],
@@ -80,6 +85,12 @@ export class ClausesPage {
   readonly treeNodes = computed(() => this.toTreeNodes(this.clauseTree()));
   readonly role = toSignal(this.store.select(selectRole), {
     initialValue: "reviewer_a",
+  });
+  readonly conflict = toSignal(this.store.select(selectConflict), {
+    initialValue: undefined,
+  });
+  readonly issueMap = toSignal(this.store.select(selectIssueMap), {
+    initialValue: new Map<string, ReconciliationIssue[]>(),
   });
   readonly selectedTreeKey = signal<string | null>(null);
   readonly selectedSupplierId = signal<string | null>(null);
@@ -105,6 +116,19 @@ export class ClausesPage {
     );
   });
   readonly canReview = computed(() => this.role() !== "procurement");
+  /** 当前选中响应的并发冲突：保留输入，同时展示对方改动。 */
+  readonly activeConflict = computed(() => {
+    const conflict = this.conflict();
+    const response = this.selectedResponse();
+    if (!conflict || !response || conflict.responseId !== response.id) {
+      return null;
+    }
+    return conflict;
+  });
+  readonly activeIssues = computed(() => {
+    const response = this.selectedResponse();
+    return response ? (this.issueMap().get(response.id) ?? []) : [];
+  });
   readonly clauseRisks = computed(() => {
     const clause = this.selectedClause();
     if (!clause) {
@@ -180,6 +204,10 @@ export class ClausesPage {
 
   readonly minimumClarificationDate = new Date();
 
+  /** 在途批次号：冲突重试复用同一编号，成功后清空，保证“重试返回原结果”。 */
+  private assessmentBatchId = "";
+  private clarificationBatchId = "";
+
   nodeTemplateData(node: TreeNode): Clause {
     return node.data as Clause;
   }
@@ -188,11 +216,13 @@ export class ClausesPage {
     const clause = node.data as Clause;
     this.selectedTreeKey.set(clause.id);
     this.selectedSupplierId.set(clause.responses[0]?.supplierId ?? null);
+    this.assessmentBatchId = "";
     this.resetAssessmentForm(clause.responses[0]);
   }
 
   selectResponse(response: SupplierResponse): void {
     this.selectedSupplierId.set(response.supplierId);
+    this.assessmentBatchId = "";
     this.resetAssessmentForm(response);
   }
 
@@ -203,10 +233,13 @@ export class ClausesPage {
       this.assessmentForm.markAllAsTouched();
       return;
     }
-    if (!this.canReview()) {
+    if (!this.canReview() || response.quarantined) {
       return;
     }
     const value = this.assessmentForm.getRawValue();
+    if (!this.assessmentBatchId) {
+      this.assessmentBatchId = this.batchIds.next("assessment");
+    }
     this.store.dispatch(
       ReviewActions.submitAssessment({
         input: {
@@ -216,6 +249,9 @@ export class ClausesPage {
           comment: value.comment,
           reviewer: roleProfiles[this.role()].name,
           role: this.role(),
+          // 冲突后重试复用同一批次号：服务端返回原结果，不重复追加意见或日志。
+          batchId: this.assessmentBatchId,
+          expectedRevision: response.revision,
         },
       }),
     );
@@ -236,6 +272,9 @@ export class ClausesPage {
       return;
     }
     const value = this.clarificationForm.getRawValue();
+    if (!this.clarificationBatchId) {
+      this.clarificationBatchId = this.batchIds.next("clarification");
+    }
     this.store.dispatch(
       ReviewActions.requestClarification({
         input: {
@@ -243,6 +282,9 @@ export class ClausesPage {
           requestText: value.requestText,
           dueAt: value.dueAt.toISOString(),
           actor: roleProfiles[this.role()].name,
+          role: this.role(),
+          batchId: this.clarificationBatchId,
+          expectedRevision: response.revision,
         },
       }),
     );

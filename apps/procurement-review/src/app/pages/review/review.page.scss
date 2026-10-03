@@ -1,6 +1,6 @@
 .version-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(6, minmax(140px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 
@@ -11,6 +11,12 @@
     border: 1px solid #d7e0e3;
     border-radius: 7px;
     background: #fff;
+  }
+
+  &.danger-card,
+  .danger-card {
+    border-color: #e0a4a0;
+    background: #fdf4f4;
   }
 
   span {
@@ -25,6 +31,128 @@
 
   strong.danger {
     color: #ae291f;
+  }
+}
+
+.conflict-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid #f0c36a;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #744600;
+  font-size: 13px;
+  line-height: 1.55;
+
+  i {
+    margin-top: 3px;
+    font-size: 18px;
+  }
+
+  p {
+    margin: 2px 0 0;
+  }
+}
+
+.reconciliation-panel {
+  margin-bottom: 16px;
+}
+
+.tag-stack {
+  display: flex;
+  gap: 8px;
+}
+
+.recon-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid #eef2f3;
+  border-bottom: 1px solid #eef2f3;
+  background: #fafcfc;
+  color: #63777e;
+  font-size: 12px;
+}
+
+.quarantined-row {
+  background: #fdf4f4 !important;
+}
+
+.row-warning {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  color: #ae291f;
+  font-size: 11px;
+}
+
+.hash-code {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.hash-state {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+
+  &.verified {
+    background: #e3f4ec;
+    color: #146c43;
+  }
+
+  &.missing {
+    background: #fff1c9;
+    color: #8a5a00;
+  }
+
+  &.mismatch {
+    background: #fdecec;
+    color: #ae291f;
+  }
+}
+
+.batch-ref {
+  color: #5f7a80;
+  font-size: 10px;
+  word-break: break-all;
+}
+
+.batch-missing {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #fff1c9;
+  color: #8a5a00;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.resolve-context {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e0a4a0;
+  border-radius: 6px;
+  background: #fdf4f4;
+
+  .tag-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  small {
+    color: #7a271a;
+    line-height: 1.5;
   }
 }
 

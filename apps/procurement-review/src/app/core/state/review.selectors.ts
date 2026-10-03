@@ -3,6 +3,7 @@ import type {
   Clause,
   ClauseTreeNode,
   ComplianceStatus,
+  ReconciliationIssue,
   ReviewState,
   SupplierResponse,
 } from "../models/review.models";
@@ -23,6 +24,41 @@ export const selectVersions = createSelector(
 export const selectAuditLogs = createSelector(
   selectReviewState,
   (state) => state.auditLogs,
+);
+
+export const selectBatches = createSelector(
+  selectReviewState,
+  (state) => state.batches,
+);
+
+export const selectReconciliation = createSelector(
+  selectReviewState,
+  (state) => state.reconciliation,
+);
+
+export const selectReconciliationIssues = createSelector(
+  selectReconciliation,
+  (reconciliation) => reconciliation?.issues ?? [],
+);
+
+export const selectPendingIssues = createSelector(
+  selectReconciliationIssues,
+  (issues) => issues.filter((issue) => !issue.resolved),
+);
+
+export const selectQuarantinedIssues = createSelector(
+  selectPendingIssues,
+  (issues) => issues.filter((issue) => issue.severity === "quarantined"),
+);
+
+export const selectGlobalRevision = createSelector(
+  selectReviewState,
+  (state) => state.globalRevision,
+);
+
+export const selectConflict = createSelector(
+  selectReviewState,
+  (state) => state.conflict,
 );
 
 export const selectDashboard = createSelector(
@@ -68,6 +104,24 @@ export const selectError = createSelector(
 export const selectToast = createSelector(
   selectReviewState,
   (state) => state.toast,
+);
+
+/** 隔离响应的问题编号，供条款页/复核页定位。 */
+export const selectIssueMap = createSelector(
+  selectPendingIssues,
+  (issues) => {
+    const byResponse = new Map<string, ReconciliationIssue[]>();
+    for (const issue of issues) {
+      const key =
+        issue.responseId ??
+        (issue.entityType === "response" ? issue.entityId : undefined);
+      if (!key) {
+        continue;
+      }
+      byResponse.set(key, [...(byResponse.get(key) ?? []), issue]);
+    }
+    return byResponse;
+  },
 );
 
 export const hasReviewDifference = (response: SupplierResponse): boolean => {
@@ -167,7 +221,10 @@ export const selectDifferences = createSelector(
   (clauses) =>
     clauses.flatMap((clause) =>
       clause.responses
-        .filter(hasReviewDifference)
+        .filter(
+          (response) =>
+            !response.quarantined && hasReviewDifference(response),
+        )
         .map((response) => ({ clause, response })),
     ),
 );
@@ -176,19 +233,21 @@ export const selectPendingClarifications = createSelector(
   selectClauses,
   (clauses) =>
     clauses.flatMap((clause) =>
-      clause.responses.flatMap((response) =>
-        response.clarifications
-          .filter(
-            (clarification) =>
-              clarification.status === "open" ||
-              clarification.status === "overdue",
-          )
-          .map((clarification) => ({
-            clause,
-            response,
-            clarification,
-          })),
-      ),
+      clause.responses
+        .filter((response) => !response.quarantined)
+        .flatMap((response) =>
+          response.clarifications
+            .filter(
+              (clarification) =>
+                clarification.status === "open" ||
+                clarification.status === "overdue",
+            )
+            .map((clarification) => ({
+              clause,
+              response,
+              clarification,
+            })),
+        ),
     ),
 );
 
@@ -200,11 +259,13 @@ export const selectReusedProofs = createSelector(
       Array<{ clause: Clause; response: SupplierResponse }>
     >();
     clauses.forEach((clause) => {
-      clause.responses.forEach((response) => {
-        const current = counts.get(response.proofFingerprint) ?? [];
-        current.push({ clause, response });
-        counts.set(response.proofFingerprint, current);
-      });
+      clause.responses
+        .filter((response) => !response.quarantined)
+        .forEach((response) => {
+          const current = counts.get(response.proofFingerprint) ?? [];
+          current.push({ clause, response });
+          counts.set(response.proofFingerprint, current);
+        });
     });
     return Array.from(counts.entries())
       .filter(([, entries]) => entries.length > 1)

@@ -3,12 +3,13 @@ import { Apollo, gql } from "apollo-angular";
 import { Observable, map } from "rxjs";
 import type {
   AssessmentInput,
-  Clarification,
   ClarificationInput,
+  ClarificationMutationResult,
   ClarificationResponseInput,
   FinalizeVersionInput,
-  ReviewVersion,
-  ReviewerOpinion,
+  FinalizeVersionResult,
+  RespondClarificationResult,
+  SubmitAssessmentResult,
   WorkspaceQueryResult,
 } from "../models/review.models";
 
@@ -39,6 +40,10 @@ const WORKSPACE_QUERY = gql`
           submittedBy
           submittedAt
           reviewRound
+          revision
+          quarantined
+          quarantineReason
+          issueIds
           reviews {
             id
             responseId
@@ -48,6 +53,9 @@ const WORKSPACE_QUERY = gql`
             score
             comment
             createdAt
+            batchId
+            opSeq
+            auditId
           }
           clarifications {
             id
@@ -60,6 +68,12 @@ const WORKSPACE_QUERY = gql`
             dueAt
             respondedAt
             status
+            batchId
+            opSeq
+            responseBatchId
+            responseOpSeq
+            requestAuditId
+            responseAuditId
           }
         }
       }
@@ -74,6 +88,13 @@ const WORKSPACE_QUERY = gql`
         clauseCount
         responseCount
         contentHash
+        batchId
+        opSeq
+        auditId
+        quarantined
+        quarantineReason
+        issueIds
+        hashStatus
       }
       auditLogs {
         id
@@ -82,7 +103,57 @@ const WORKSPACE_QUERY = gql`
         action
         entity
         detail
+        batchId
+        opSeq
+        entityRefId
       }
+      batches {
+        id
+        revision
+        operation
+        opSeq
+        status
+        createdAt
+        committedAt
+        actor
+        role
+        expectedRevision
+        responseId
+        resultEntityId
+        resultEntityType
+        replayCount
+        lastReplayAt
+      }
+      reconciliation {
+        summary {
+          reconciledAt
+          totalBatches
+          unfinishedBatches
+          replayedBatches
+          backfilledBatches
+          quarantinedResponses
+          quarantinedVersions
+          pendingIssues
+          resolvedIssues
+        }
+        issues {
+          id
+          kind
+          severity
+          entityType
+          entityId
+          responseId
+          message
+          detail
+          detectedAt
+          resolved
+          resolvedAt
+          resolvedBy
+          resolution
+        }
+        lastStartupReplay
+      }
+      globalRevision
       dashboard {
         totalClauses
         mandatoryCount
@@ -91,6 +162,10 @@ const WORKSPACE_QUERY = gql`
         overdueClarifications
         reusedProofs
         activeVersion
+        quarantinedResponses
+        quarantinedVersions
+        pendingReconciliation
+        unfinishedBatches
       }
       suppliers {
         id
@@ -100,68 +175,263 @@ const WORKSPACE_QUERY = gql`
   }
 `;
 
+const RECEIPT_FIELDS = gql`
+  fragment BatchReceiptFields on BatchReceipt {
+    batchId
+    opSeq
+    revision
+    replayed
+    auditId
+  }
+`;
+
 const SUBMIT_ASSESSMENT = gql`
+  ${RECEIPT_FIELDS}
   mutation SubmitAssessment($input: AssessmentInput!) {
     submitAssessment(input: $input) {
-      id
-      responseId
-      reviewer
-      role
-      decision
-      score
-      comment
-      createdAt
+      __typename
+      ... on AssessmentResult {
+        opinion {
+          id
+          responseId
+          reviewer
+          role
+          decision
+          score
+          comment
+          createdAt
+          batchId
+          opSeq
+          auditId
+        }
+        receipt {
+          ...BatchReceiptFields
+        }
+      }
+      ... on ConcurrentChange {
+        batchId
+        expectedRevision
+        currentRevision
+        responseId
+        message
+        latestBy
+        latestAt
+        latestDetail
+      }
+      ... on QuarantineConflict {
+        batchId
+        issueId
+        responseId
+        message
+      }
     }
   }
 `;
 
 const REQUEST_CLARIFICATION = gql`
+  ${RECEIPT_FIELDS}
   mutation RequestClarification($input: ClarificationInput!) {
     requestClarification(input: $input) {
-      id
-      responseId
-      clauseId
-      round
-      requestText
-      supplierResponse
-      requestedAt
-      dueAt
-      respondedAt
-      status
+      __typename
+      ... on ClarificationResult {
+        clarification {
+          id
+          responseId
+          clauseId
+          round
+          requestText
+          supplierResponse
+          requestedAt
+          dueAt
+          respondedAt
+          status
+          batchId
+          opSeq
+          responseBatchId
+          responseOpSeq
+          requestAuditId
+          responseAuditId
+        }
+        receipt {
+          ...BatchReceiptFields
+        }
+      }
+      ... on ConcurrentChange {
+        batchId
+        expectedRevision
+        currentRevision
+        responseId
+        message
+        latestBy
+        latestAt
+        latestDetail
+      }
+      ... on QuarantineConflict {
+        batchId
+        issueId
+        responseId
+        message
+      }
     }
   }
 `;
 
 const RESPOND_CLARIFICATION = gql`
+  ${RECEIPT_FIELDS}
   mutation RespondClarification($input: ClarificationResponseInput!) {
     respondClarification(input: $input) {
-      id
-      responseId
-      clauseId
-      round
-      requestText
-      supplierResponse
-      requestedAt
-      dueAt
-      respondedAt
-      status
+      __typename
+      ... on ClarificationResult {
+        clarification {
+          id
+          responseId
+          clauseId
+          round
+          requestText
+          supplierResponse
+          requestedAt
+          dueAt
+          respondedAt
+          status
+          batchId
+          opSeq
+          responseBatchId
+          responseOpSeq
+          requestAuditId
+          responseAuditId
+        }
+        receipt {
+          ...BatchReceiptFields
+        }
+      }
+      ... on ConcurrentChange {
+        batchId
+        expectedRevision
+        currentRevision
+        responseId
+        message
+        latestBy
+        latestAt
+        latestDetail
+      }
+      ... on QuarantineConflict {
+        batchId
+        issueId
+        responseId
+        message
+      }
     }
   }
 `;
 
 const FINALIZE_VERSION = gql`
+  ${RECEIPT_FIELDS}
   mutation FinalizeVersion($input: FinalizeVersionInput!) {
     finalizeVersion(input: $input) {
-      id
-      version
-      label
-      status
-      createdAt
-      createdBy
-      signedBy
-      clauseCount
-      responseCount
-      contentHash
+      __typename
+      ... on FinalizeResult {
+        version {
+          id
+          version
+          label
+          status
+          createdAt
+          createdBy
+          signedBy
+          clauseCount
+          responseCount
+          contentHash
+          batchId
+          opSeq
+          auditId
+          quarantined
+          quarantineReason
+          issueIds
+          hashStatus
+        }
+        receipt {
+          ...BatchReceiptFields
+        }
+      }
+      ... on ConcurrentChange {
+        batchId
+        expectedRevision
+        currentRevision
+        responseId
+        message
+        latestBy
+        latestAt
+        latestDetail
+      }
+      ... on QuarantineConflict {
+        batchId
+        issueId
+        responseId
+        message
+      }
+    }
+  }
+`;
+
+const RESOLVE_QUARANTINE = gql`
+  mutation ResolveQuarantine($input: ResolveQuarantineInput!) {
+    resolveQuarantine(input: $input) {
+      issue {
+        id
+        kind
+        severity
+        entityType
+        entityId
+        responseId
+        message
+        detail
+        detectedAt
+        resolved
+        resolvedAt
+        resolvedBy
+        resolution
+      }
+      receipt {
+        batchId
+        opSeq
+        revision
+        replayed
+        auditId
+      }
+    }
+  }
+`;
+
+const RERUN_RECONCILIATION = gql`
+  mutation RerunReconciliation($role: ReviewRole!) {
+    rerunReconciliation(role: $role) {
+      summary {
+        reconciledAt
+        totalBatches
+        unfinishedBatches
+        replayedBatches
+        backfilledBatches
+        quarantinedResponses
+        quarantinedVersions
+        pendingIssues
+        resolvedIssues
+      }
+      issues {
+        id
+        kind
+        severity
+        entityType
+        entityId
+        responseId
+        message
+        detail
+        detectedAt
+        resolved
+        resolvedAt
+        resolvedBy
+        resolution
+      }
+      lastStartupReplay
     }
   }
 `;
@@ -192,12 +462,13 @@ export class ReviewGraphqlService {
       );
   }
 
-  submitAssessment(input: AssessmentInput): Observable<ReviewerOpinion> {
+  submitAssessment(
+    input: AssessmentInput,
+  ): Observable<SubmitAssessmentResult> {
     return this.apollo
-      .mutate<{ submitAssessment: ReviewerOpinion }>({
+      .mutate<{ submitAssessment: SubmitAssessmentResult }>({
         mutation: SUBMIT_ASSESSMENT,
         variables: { input },
-        refetchQueries: ["ProcurementReviewWorkspace"],
       })
       .pipe(
         map((result) => {
@@ -209,12 +480,13 @@ export class ReviewGraphqlService {
       );
   }
 
-  requestClarification(input: ClarificationInput): Observable<Clarification> {
+  requestClarification(
+    input: ClarificationInput,
+  ): Observable<ClarificationMutationResult> {
     return this.apollo
-      .mutate<{ requestClarification: Clarification }>({
+      .mutate<{ requestClarification: ClarificationMutationResult }>({
         mutation: REQUEST_CLARIFICATION,
         variables: { input },
-        refetchQueries: ["ProcurementReviewWorkspace"],
       })
       .pipe(
         map((result) => {
@@ -228,12 +500,11 @@ export class ReviewGraphqlService {
 
   respondClarification(
     input: ClarificationResponseInput,
-  ): Observable<Clarification> {
+  ): Observable<RespondClarificationResult> {
     return this.apollo
-      .mutate<{ respondClarification: Clarification }>({
+      .mutate<{ respondClarification: RespondClarificationResult }>({
         mutation: RESPOND_CLARIFICATION,
         variables: { input },
-        refetchQueries: ["ProcurementReviewWorkspace"],
       })
       .pipe(
         map((result) => {
@@ -245,12 +516,13 @@ export class ReviewGraphqlService {
       );
   }
 
-  finalizeVersion(input: FinalizeVersionInput): Observable<ReviewVersion> {
+  finalizeVersion(
+    input: FinalizeVersionInput,
+  ): Observable<FinalizeVersionResult> {
     return this.apollo
-      .mutate<{ finalizeVersion: ReviewVersion }>({
+      .mutate<{ finalizeVersion: FinalizeVersionResult }>({
         mutation: FINALIZE_VERSION,
         variables: { input },
-        refetchQueries: ["ProcurementReviewWorkspace"],
       })
       .pipe(
         map((result) => {
@@ -262,11 +534,53 @@ export class ReviewGraphqlService {
       );
   }
 
+  resolveQuarantine(input: {
+    issueId: string;
+    note: string;
+    actor: string;
+    role: import("../models/review.models").ReviewRole;
+  }) {
+    return this.apollo
+      .mutate<{
+        resolveQuarantine: {
+          issue: import("../models/review.models").ReconciliationIssue;
+        };
+      }>({
+        mutation: RESOLVE_QUARANTINE,
+        variables: { input },
+      })
+      .pipe(
+        map((result) => {
+          if (!result.data) {
+            throw new Error("GraphQL 未返回复核结果。");
+          }
+          return result.data.resolveQuarantine.issue;
+        }),
+      );
+  }
+
+  rerunReconciliation(role: import("../models/review.models").ReviewRole) {
+    return this.apollo
+      .mutate<{
+        rerunReconciliation: import("../models/review.models").ReconciliationState;
+      }>({
+        mutation: RERUN_RECONCILIATION,
+        variables: { role },
+      })
+      .pipe(
+        map((result) => {
+          if (!result.data) {
+            throw new Error("GraphQL 未返回复核结果。");
+          }
+          return result.data.rerunReconciliation;
+        }),
+      );
+  }
+
   resetReviewData(): Observable<boolean> {
     return this.apollo
       .mutate<{ resetReviewData: boolean }>({
         mutation: RESET_REVIEW_DATA,
-        refetchQueries: ["ProcurementReviewWorkspace"],
       })
       .pipe(
         map((result) => {
@@ -278,3 +592,4 @@ export class ReviewGraphqlService {
       );
   }
 }
+

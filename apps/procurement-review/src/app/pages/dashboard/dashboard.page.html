@@ -23,6 +23,21 @@
   </header>
 
   @if (dashboard(); as stats) {
+    @if (reconciliationIssues().length > 0) {
+      <a class="reconciliation-banner" routerLink="/review">
+        <i class="pi pi-shield"></i>
+        <div>
+          <strong>
+            对账发现 {{ reconciliationIssues().length }} 项待处理
+            （{{ quarantineCount() }} 项已隔离）
+          </strong>
+          <p>
+            不一致的响应和版本已隔离，须由评审组长在小组复核队列确认修复。
+          </p>
+        </div>
+        <i class="pi pi-angle-right banner-arrow"></i>
+      </a>
+    }
     <div class="metric-grid">
       <article class="metric">
         <span>技术条款</span>
@@ -53,6 +68,24 @@
         <span>当前工作版本</span>
         <strong class="version">{{ stats.activeVersion }}</strong>
         <small>定稿后锁定快照</small>
+      </article>
+      <article class="metric" [class.metric-danger]="stats.pendingReconciliation > 0">
+        <span>对账待处理</span>
+        <strong [class.danger]="stats.pendingReconciliation > 0">
+          {{ stats.pendingReconciliation }}
+        </strong>
+        <small>
+          隔离 {{ stats.quarantinedResponses }} 响应 ·
+          {{ stats.quarantinedVersions }} 版本
+        </small>
+      </article>
+      <article class="metric">
+        <span>审计批次</span>
+        <strong>{{ reconciliation()?.summary?.totalBatches ?? 0 }}</strong>
+        <small>
+          重放 {{ reconciliation()?.summary?.replayedBatches ?? 0 }} ·
+          回填 {{ reconciliation()?.summary?.backfilledBatches ?? 0 }}
+        </small>
       </article>
     </div>
 

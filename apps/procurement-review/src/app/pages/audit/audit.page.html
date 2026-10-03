@@ -38,8 +38,14 @@
       <strong>{{ finalizedCount() }}</strong>
     </article>
     <article>
-      <span>当前导出条数</span>
-      <strong>{{ filteredLogs().length }}</strong>
+      <span>已提交批次</span>
+      <strong>{{ committedBatches() }}</strong>
+    </article>
+    <article [class.card-danger]="issues().length > 0">
+      <span>对账待处理</span>
+      <strong [class.danger-text]="issues().length > 0">
+        {{ issues().length }}
+      </strong>
     </article>
     <article class="version-card">
       <span>最近定稿</span>
@@ -47,6 +53,45 @@
       <small>{{ finalVersion()?.label ?? "尚未签字定稿" }}</small>
     </article>
   </div>
+
+  @if (reconciliation(); as recon) {
+    <section class="data-panel recon-panel">
+      <div class="data-panel-header">
+        <div>
+          <h3>对账结论（与总览、条款页、复核队列同源）</h3>
+          <p>
+            审计批次 {{ recon.summary.totalBatches }} 个 · 启动重放
+            {{ recon.summary.replayedBatches }} 个 · 旧数据回填
+            {{ recon.summary.backfilledBatches }} 个 ·
+            未完成 {{ recon.summary.unfinishedBatches }} 个 ·
+            隔离响应 {{ recon.summary.quarantinedResponses }} 个 ·
+            隔离版本 {{ recon.summary.quarantinedVersions }} 个
+          </p>
+        </div>
+        <p-tag
+          [value]="issues().length ? issues().length + ' 项待处理' : '对账一致'"
+          [severity]="issues().length ? 'danger' : 'success'"
+        />
+      </div>
+      @if (issues().length) {
+        <div class="issue-list">
+          @for (issue of issues(); track issue.id) {
+            <div class="issue-row">
+              <p-tag
+                [value]="issue.severity === 'quarantined' ? '已隔离' : '待核'"
+                [severity]="issue.severity === 'quarantined' ? 'danger' : 'warn'"
+              />
+              <div>
+                <strong>{{ issueLabel(issue.kind) }}</strong>
+                <span>{{ issue.message }}</span>
+              </div>
+              <small class="mono">{{ issue.entityId }}</small>
+            </div>
+          }
+        </div>
+      }
+    </section>
+  }
 
   <section class="data-panel filter-panel">
     <div class="audit-filters">
@@ -99,6 +144,7 @@
           <th>动作</th>
           <th>对象</th>
           <th>详情</th>
+          <th>审计批次 / 操作编号</th>
         </tr>
       </ng-template>
       <ng-template pTemplate="body" let-log>
@@ -110,11 +156,20 @@
           </td>
           <td class="mono">{{ log.entity }}</td>
           <td>{{ log.detail }}</td>
+          <td>
+            @if (log.batchId) {
+              <span class="mono batch-cell">
+                {{ log.batchId }}#{{ log.opSeq }}
+              </span>
+            } @else {
+              <span class="legacy-cell">旧日志</span>
+            }
+          </td>
         </tr>
       </ng-template>
       <ng-template pTemplate="emptymessage">
         <tr>
-          <td colspan="5">没有符合条件的审计事件。</td>
+          <td colspan="6">没有符合条件的审计事件。</td>
         </tr>
       </ng-template>
     </p-table>

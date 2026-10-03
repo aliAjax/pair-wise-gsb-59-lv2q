@@ -134,10 +134,16 @@
             <td
               [class.cell-warning]="hasDifference(response)"
               [class.cell-reused]="isReusedProof(response)"
+              [class.cell-quarantined]="response?.quarantined"
             >
               @if (response) {
                 <div class="cell-stack">
                   <app-status-tag [status]="response.status" />
+                  @if (response.quarantined) {
+                    <span class="quarantine-pill">
+                      <i class="pi pi-lock"></i> 已隔离·待组长修复
+                    </span>
+                  }
                   @if (clause.type === "scoring") {
                     <strong class="score">{{ response.claimedScore }} 分</strong>
                   }

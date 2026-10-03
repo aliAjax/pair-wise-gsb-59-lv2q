@@ -12,7 +12,7 @@
         icon="pi pi-comments"
         severity="secondary"
         [outlined]="true"
-        [disabled]="!selectedResponse()"
+        [disabled]="!selectedResponse() || selectedResponse()?.quarantined === true"
         (onClick)="openClarificationDialog()"
       />
       <p-button
@@ -88,15 +88,45 @@
             <button
               type="button"
               [class.active]="selectedResponse()?.id === response.id"
+              [class.quarantined-tab]="response.quarantined"
               (click)="selectResponse(response)"
             >
               <span>{{ response.supplierName }}</span>
               <app-status-tag [status]="response.status" />
+              @if (response.quarantined) {
+                <small class="quarantine-dot">已隔离</small>
+              }
             </button>
           }
         </section>
 
         @if (selectedResponse(); as response) {
+          @if (response.quarantined) {
+            <div class="quarantine-banner">
+              <i class="pi pi-lock"></i>
+              <div>
+                <strong>该响应已对账隔离，组长确认修复前只读</strong>
+                <p>{{ response.quarantineReason }}</p>
+                @for (issue of activeIssues(); track issue.id) {
+                  <span class="issue-chip">{{ issue.message }}</span>
+                }
+              </div>
+            </div>
+          }
+          @if (activeConflict(); as conflict) {
+            <div class="conflict-banner">
+              <i class="pi pi-sync"></i>
+              <div>
+                <strong>{{ conflict.message }}</strong>
+                <p>
+                  对方改动：{{ conflict.latestBy }} ·
+                  {{ conflict.latestAt | date: "yyyy-MM-dd HH:mm:ss" }} ·
+                  {{ conflict.latestDetail }}
+                </p>
+                <small>您表单中未提交的输入已保留，确认对方改动后可直接再次提交。</small>
+              </div>
+            </div>
+          }
           <div class="response-grid">
             <section class="data-panel response-content">
               <div class="data-panel-header">
@@ -128,13 +158,17 @@
                     <dt>评审轮次</dt>
                     <dd>第 {{ response.reviewRound }} 轮</dd>
                   </div>
+                  <div>
+                    <dt>修订号</dt>
+                    <dd class="mono">rev {{ response.revision }}</dd>
+                  </div>
                 </dl>
 
                 <h4>独立评审意见</h4>
                 @if (response.reviews.length) {
                   <div class="opinion-list">
                     @for (review of response.reviews; track review.id) {
-                      <article>
+                      <article [class.unverified-opinion]="!review.batchId">
                         <header>
                           <strong>{{ review.reviewer }}</strong>
                           <app-status-tag [status]="review.decision" />
@@ -142,6 +176,13 @@
                             <span>{{ review.score }} 分</span>
                           }
                           <time>{{ review.createdAt | date: "MM-dd HH:mm" }}</time>
+                          @if (review.batchId) {
+                            <span class="batch-ref mono">
+                              {{ review.batchId }}#{{ review.opSeq }}
+                            </span>
+                          } @else {
+                            <span class="batch-missing">待核：缺批次</span>
+                          }
                         </header>
                         <p>{{ review.comment }}</p>
                       </article>
@@ -201,6 +242,11 @@
                     采购人员可维护条款和发起澄清，不能代替评审员提交符合性结论。
                   </div>
                 }
+                @if (response.quarantined) {
+                  <div class="permission-note warn">
+                    响应已隔离，评审员不能越权处理，请等待评审组长在复核队列确认修复。
+                  </div>
+                }
                 <div class="field">
                   <label for="decision">符合性结论</label>
                   <p-select
@@ -248,9 +294,9 @@
                 </div>
                 <p-button
                   type="submit"
-                  label="提交独立意见"
+                  [label]="activeConflict() ? '基于最新修订重试提交' : '提交独立意见'"
                   icon="pi pi-check"
-                  [disabled]="!canReview()"
+                  [disabled]="!canReview() || response.quarantined"
                   [loading]="false"
                   styleClass="full-button"
                 />

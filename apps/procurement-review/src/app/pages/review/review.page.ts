@@ -16,16 +16,23 @@ import { TableModule } from "primeng/table";
 import { TagModule } from "primeng/tag";
 import { TextareaModule } from "primeng/textarea";
 import {
+  issueKindLabels,
   roleProfiles,
   type Clarification,
   type Clause,
+  type ReconciliationIssue,
   type SupplierResponse,
 } from "../../core/models/review.models";
+import { BatchIdService } from "../../core/services/batch-id.service";
 import { ReviewActions } from "../../core/state/review.actions";
 import {
   hasReviewDifference,
   selectClauses,
+  selectConflict,
+  selectGlobalRevision,
   selectPendingClarifications,
+  selectPendingIssues,
+  selectReconciliation,
   selectRole,
   selectVersions,
 } from "../../core/state/review.selectors";
@@ -63,7 +70,9 @@ interface PendingClarification {
 })
 export class ReviewPage {
   private readonly store = inject(Store);
+  private readonly batchIds = inject(BatchIdService);
 
+  readonly issueLabels = issueKindLabels;
   readonly versions = toSignal(this.store.select(selectVersions), {
     initialValue: [],
   });
@@ -73,27 +82,59 @@ export class ReviewPage {
   readonly role = toSignal(this.store.select(selectRole), {
     initialValue: "reviewer_a",
   });
+  readonly globalRevision = toSignal(this.store.select(selectGlobalRevision), {
+    initialValue: 1,
+  });
+  readonly reconciliation = toSignal(
+    this.store.select(selectReconciliation),
+    { initialValue: undefined },
+  );
+  readonly issues = toSignal(this.store.select(selectPendingIssues), {
+    initialValue: [] as ReconciliationIssue[],
+  });
+  readonly conflict = toSignal(this.store.select(selectConflict), {
+    initialValue: undefined,
+  });
   readonly pendingClarifications = toSignal(
     this.store.select(selectPendingClarifications),
     { initialValue: [] as PendingClarification[] },
   );
   readonly finalizeVisible = signal(false);
   readonly responseVisible = signal(false);
+  readonly resolveVisible = signal(false);
   readonly selectedClarification = signal<PendingClarification | null>(null);
+  readonly selectedIssue = signal<ReconciliationIssue | null>(null);
   readonly canFinalize = computed(() => this.role() === "chair");
   readonly canRespond = computed(() =>
     ["procurement", "chair"].includes(this.role()),
   );
+  readonly canResolve = computed(() => this.role() === "chair");
   readonly differences = computed(() =>
     this.clauses().flatMap((clause) =>
       clause.responses
-        .filter(hasReviewDifference)
+        .filter(
+          (response) =>
+            !response.quarantined && hasReviewDifference(response),
+        )
         .map((response) => ({ clause, response })),
     ),
   );
   readonly finalizedCount = computed(
     () => this.versions().filter((version) => version.status === "finalized").length,
   );
+  readonly quarantinedVersions = computed(() =>
+    this.versions().filter((version) => version.quarantined),
+  );
+  /** 隔离类问题进入组长修复队列；待核类问题展示但允许采购/评审只读查看。 */
+  readonly quarantineIssues = computed(() =>
+    this.issues().filter((issue) => issue.severity === "quarantined"),
+  );
+  readonly pendingVerificationIssues = computed(() =>
+    this.issues().filter((issue) => issue.severity === "pending"),
+  );
+
+  private clarifyBatchId = "";
+  private finalizeBatchId = "";
 
   readonly finalizeForm = new FormGroup({
     label: new FormControl("", {
@@ -107,6 +148,12 @@ export class ReviewPage {
       validators: [Validators.required, Validators.minLength(6)],
     }),
   });
+  readonly resolveForm = new FormGroup({
+    note: new FormControl("", {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(4)],
+    }),
+  });
 
   openFinalize(): void {
     this.finalizeForm.reset({ label: "技术响应符合性评审汇总" });
@@ -118,12 +165,17 @@ export class ReviewPage {
       this.finalizeForm.markAllAsTouched();
       return;
     }
+    if (!this.finalizeBatchId) {
+      this.finalizeBatchId = this.batchIds.next("finalize");
+    }
     this.store.dispatch(
       ReviewActions.finalizeVersion({
         input: {
           label: this.finalizeForm.controls.label.value,
           actor: roleProfiles[this.role()].name,
           role: this.role(),
+          batchId: this.finalizeBatchId,
+          expectedRevision: this.globalRevision(),
         },
       }),
     );
@@ -146,15 +198,57 @@ export class ReviewPage {
       this.responseForm.markAllAsTouched();
       return;
     }
+    if (!this.clarifyBatchId) {
+      this.clarifyBatchId = this.batchIds.next("respond");
+    }
     this.store.dispatch(
       ReviewActions.respondClarification({
         input: {
           clarificationId: item.clarification.id,
           responseText: this.responseForm.controls.responseText.value,
           actor: roleProfiles[this.role()].name,
+          role: this.role(),
+          batchId: this.clarifyBatchId,
+          expectedRevision: item.response.revision,
         },
       }),
     );
     this.responseVisible.set(false);
+  }
+
+  openResolve(issue: ReconciliationIssue): void {
+    this.selectedIssue.set(issue);
+    this.resolveForm.reset({ note: "" });
+    this.resolveVisible.set(true);
+  }
+
+  resolveQuarantine(): void {
+    const issue = this.selectedIssue();
+    if (!issue || !this.canResolve() || this.resolveForm.invalid) {
+      this.resolveForm.markAllAsTouched();
+      return;
+    }
+    this.store.dispatch(
+      ReviewActions.resolveQuarantine({
+        issueId: issue.id,
+        note: this.resolveForm.controls.note.value,
+        actor: roleProfiles[this.role()].name,
+        role: this.role(),
+      }),
+    );
+    this.resolveVisible.set(false);
+  }
+
+  rerunReconciliation(): void {
+    if (!this.canResolve()) {
+      return;
+    }
+    this.store.dispatch(
+      ReviewActions.rerunReconciliation({ role: this.role() }),
+    );
+  }
+
+  issueLabel(kind: string): string {
+    return issueKindLabels[kind] ?? kind;
   }
 }

@@ -31,15 +31,49 @@
       <span>未完成澄清</span>
       <strong class="danger">{{ pendingClarifications().length }}</strong>
     </article>
+    <article [class.danger-card]="issues().length > 0">
+      <span>对账待处理</span>
+      <strong [class.danger]="issues().length > 0">{{ issues().length }}</strong>
+    </article>
+    <article [class.danger-card]="quarantineIssues().length > 0">
+      <span>已隔离对象</span>
+      <strong class="danger">
+        {{ quarantineIssues().length }}
+      </strong>
+    </article>
   </div>
+
+  @if (conflict(); as conflict) {
+    <div class="conflict-strip">
+      <i class="pi pi-sync"></i>
+      <div>
+        <strong>{{ conflict.message }}</strong>
+        <p>
+          对方改动：{{ conflict.latestBy }} ·
+          {{ conflict.latestAt | date: "yyyy-MM-dd HH:mm:ss" }} ·
+          {{ conflict.latestDetail }}
+        </p>
+      </div>
+    </div>
+  }
 
   <div class="review-grid">
     <section class="data-panel versions-panel">
       <div class="data-panel-header">
         <div>
           <h3>版本历史</h3>
-          <p>定稿版本保存内容哈希和签署人</p>
+          <p>定稿版本保存可复核内容哈希和签署人；哈希或批次异常的版本先隔离</p>
         </div>
+        @if (canResolve()) {
+          <p-button
+            label="重新对账"
+            icon="pi pi-refresh"
+            size="small"
+            severity="secondary"
+            [outlined]="true"
+            (onClick)="rerunReconciliation()"
+          />
+        }
       </div>
       <p-table [value]="versions()" responsiveLayout="scroll">
         <ng-template pTemplate="header">
@@ -48,12 +82,13 @@
             <th>名称</th>
             <th>状态</th>
             <th>响应项</th>
-            <th>内容哈希</th>
+            <th>内容哈希复核</th>
+            <th>审计批次</th>
             <th>创建信息</th>
           </tr>
         </ng-template>
         <ng-template pTemplate="body" let-version>
-          <tr>
+          <tr [class.quarantined-row]="version.quarantined">
             <td class="mono">{{ version.version }}</td>
             <td>
               <span class="table-primary">{{ version.label }}</span>
@@ -61,6 +96,11 @@
                 签署人：
                 {{ version.signedBy.length ? version.signedBy.join("、") : "未签署" }}
               </div>
+              @if (version.quarantined) {
+                <div class="row-warning">
+                  <i class="pi pi-lock"></i> {{ version.quarantineReason }}
+                </div>
+              }
             </td>
             <td><app-version-tag [status]="version.status" /></td>
             <td>
@@ -69,7 +109,29 @@
                 {{ version.clauseCount }} 条条款
               </div>
             </td>
-            <td class="mono">{{ version.contentHash }}</td>
+            <td>
+              <code class="mono hash-code">{{ version.contentHash }}</code>
+              @switch (version.hashStatus) {
+                @case ("verified") {
+                  <span class="hash-state verified">已复核</span>
+                }
+                @case ("missing") {
+                  <span class="hash-state missing">旧版待核</span>
+                }
+                @case ("mismatch") {
+                  <span class="hash-state mismatch">不一致</span>
+                }
+              }
+            </td>
+            <td>
+              @if (version.batchId) {
+                <span class="mono batch-ref">
+                  {{ version.batchId }}#{{ version.opSeq }}
+                </span>
+              } @else {
+                <span class="batch-missing">缺批次</span>
+              }
+            </td>
             <td>
               {{ version.createdBy }}
               <div class="table-secondary">
@@ -121,6 +183,95 @@
       }
     </aside>
   </div>
+
+  <section class="data-panel reconciliation-panel">
+    <div class="data-panel-header">
+      <div>
+        <h3>对账复核队列</h3>
+        <p>
+          启动时重放未完成批次并与当前数据对账；不一致的响应和版本先隔离，仅评审组长可确认修复，采购人员与评审员只读。
+        </p>
+      </div>
+      <div class="tag-stack">
+        <p-tag
+          [value]="quarantineIssues().length + ' 项已隔离'"
+          [severity]="quarantineIssues().length ? 'danger' : 'success'"
+        />
+        <p-tag
+          [value]="pendingVerificationIssues().length + ' 项待核'"
+          [severity]="pendingVerificationIssues().length ? 'warn' : 'success'"
+        />
+      </div>
+    </div>
+
+    @if (reconciliation(); as recon) {
+      <div class="recon-meta">
+        <span>
+          上次对账：{{ recon.summary.reconciledAt | date: "yyyy-MM-dd HH:mm:ss" }}
+        </span>
+        <span>审计批次 {{ recon.summary.totalBatches }} 个</span>
+        <span>启动重放 {{ recon.summary.replayedBatches }} 个</span>
+        <span>旧数据回填 {{ recon.summary.backfilledBatches }} 个</span>
+      </div>
+    }
+
+    @if (issues().length) {
+      <p-table [value]="issues()" responsiveLayout="scroll">
+        <ng-template pTemplate="header">
+          <tr>
+            <th>级别</th>
+            <th>问题</th>
+            <th>对象</th>
+            <th>检出时间</th>
+            <th>处理</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-issue>
+          <tr [class.quarantined-row]="issue.severity === 'quarantined'">
+            <td>
+              @if (issue.severity === "quarantined") {
+                <p-tag value="已隔离" severity="danger" />
+              } @else {
+                <p-tag value="待核" severity="warn" />
+              }
+            </td>
+            <td>
+              <strong>{{ issueLabel(issue.kind) }}</strong>
+              <div class="table-secondary">{{ issue.message }}</div>
+              @if (issue.detail) {
+                <div class="table-secondary">{{ issue.detail }}</div>
+              }
+            </td>
+            <td class="mono">
+              {{ issue.entityId }}
+              @if (issue.responseId) {
+                <div class="table-secondary">{{ issue.responseId }}</div>
+              }
+            </td>
+            <td>{{ issue.detectedAt | date: "yyyy-MM-dd HH:mm" }}</td>
+            <td>
+              @if (canResolve()) {
+                <p-button
+                  label="确认修复"
+                  icon="pi pi-check-circle"
+                  size="small"
+                  severity="danger"
+                  [outlined]="true"
+                  (onClick)="openResolve(issue)"
+                />
+              } @else {
+                <span class="table-secondary">仅评审组长可处理</span>
+              }
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    } @else {
+      <p class="empty-copy">
+        对账通过：意见、审计日志、批次与定稿哈希均与当前数据一致。
+      </p>
+    }
+  </section>
 
   <section class="data-panel difference-panel">
     <div class="data-panel-header">
@@ -250,6 +401,59 @@
         label="保存回复"
         icon="pi pi-check"
         [disabled]="responseForm.invalid"
+      />
+    </div>
+  </form>
+</p-dialog>
+
+<p-dialog
+  header="评审组长确认修复"
+  [modal]="true"
+  [visible]="resolveVisible()"
+  (visibleChange)="resolveVisible.set($event)"
+  [style]="{ width: 'min(600px, 94vw)' }"
+>
+  <form [formGroup]="resolveForm" (ngSubmit)="resolveQuarantine()">
+    @if (selectedIssue(); as issue) {
+      <div class="response-context resolve-context">
+        <div class="tag-row">
+          @if (issue.severity === "quarantined") {
+            <p-tag value="已隔离" severity="danger" />
+          } @else {
+            <p-tag value="待核" severity="warn" />
+          }
+          <span class="mono">{{ issue.id }}</span>
+        </div>
+        <strong>{{ issueLabel(issue.kind) }}</strong>
+        <p>{{ issue.message }}</p>
+        <small>
+          确认修复会登记“组长确认修复”审计批次：未完成批次将被安全撤销，响应/版本解除隔离。采购人员和评审员无法执行此操作。
+        </small>
+      </div>
+    }
+    <div class="field">
+      <label for="resolve-note">修复结论与依据</label>
+      <textarea
+        id="resolve-note"
+        pTextarea
+        formControlName="note"
+        rows="4"
+        placeholder="说明核对过程、对方改动情况以及修复依据（至少 4 个字符）"
+      ></textarea>
+    </div>
+    <div class="inline-actions dialog-actions">
+      <p-button
+        label="取消"
+        severity="secondary"
+        [outlined]="true"
+        (onClick)="resolveVisible.set(false)"
+      />
+      <p-button
+        type="submit"
+        label="确认修复并解除隔离"
+        icon="pi pi-shield"
+        severity="danger"
+        [disabled]="resolveForm.invalid"
       />
     </div>
   </form>

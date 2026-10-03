@@ -20,6 +20,7 @@ import {
 } from "./core/models/review.models";
 import { ReviewActions } from "./core/state/review.actions";
 import {
+  selectConflict,
   selectError,
   selectLoading,
   selectRole,
@@ -49,6 +50,7 @@ export class AppComponent implements OnInit {
   private readonly messages = inject(MessageService);
   private lastToast = "";
   private lastError = "";
+  private lastConflict = "";
 
   readonly roleControl = new FormControl<ReviewRole>(
     (localStorage.getItem("procurement-review-role") as ReviewRole | null) ??
@@ -68,6 +70,9 @@ export class AppComponent implements OnInit {
     initialValue: undefined,
   });
   readonly error = toSignal(this.store.select(selectError), {
+    initialValue: undefined,
+  });
+  readonly conflict = toSignal(this.store.select(selectConflict), {
     initialValue: undefined,
   });
   readonly roleOptions = Object.entries(roleProfiles).map(([value, profile]) => ({
@@ -122,10 +127,25 @@ export class AppComponent implements OnInit {
     });
   }
 
+  notifyConflict(message: string | undefined, key: string): void {
+    if (!message || this.lastConflict === key) {
+      return;
+    }
+    this.lastConflict = key;
+    this.messages.add({
+      severity: "warn",
+      summary: "检测到并发修改",
+      detail: message,
+      life: 8000,
+    });
+  }
+
   constructor() {
     effect(() => {
       this.notify(this.toast(), this.toast() ?? "");
       this.notifyError(this.error(), this.error() ?? "");
+      const conflict = this.conflict();
+      this.notifyConflict(conflict?.message, conflict?.message ?? "");
     });
   }
 }

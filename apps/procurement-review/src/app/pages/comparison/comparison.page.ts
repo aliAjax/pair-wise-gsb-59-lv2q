@@ -94,19 +94,22 @@ export class ComparisonPage {
   readonly proofCounts = computed(() => {
     const counts = new Map<string, number>();
     this.clauses().forEach((clause) =>
-      clause.responses.forEach((response) => {
-        counts.set(
-          response.proofFingerprint,
-          (counts.get(response.proofFingerprint) ?? 0) + 1,
-        );
-      }),
+      clause.responses
+        .filter((response) => !response.quarantined)
+        .forEach((response) => {
+          counts.set(
+            response.proofFingerprint,
+            (counts.get(response.proofFingerprint) ?? 0) + 1,
+          );
+        }),
     );
     return counts;
   });
   readonly differenceCount = computed(
     () =>
       this.clauses().flatMap((clause) => clause.responses).filter(
-        hasReviewDifference,
+        (response) =>
+          !response.quarantined && hasReviewDifference(response),
       ).length,
   );
   readonly reusedProofCount = computed(

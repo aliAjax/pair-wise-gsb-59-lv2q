@@ -1,6 +1,13 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+import { newBatchId } from "./ids";
 import type {
+  AuditBatch,
   AuditLog,
   Clarification,
   Clause,
@@ -280,6 +287,16 @@ const reviewFactories: Array<{
     comment: "高可用部署缺少跨机房切换演练记录。",
     createdAt: "2026-09-28T14:02:00+08:00",
   },
+  {
+    // 该意见存在、但对应审计日志缺失：用于演示“补不全进入待核”。
+    responseId: "C006-SUP-B",
+    reviewer: "李评审",
+    role: "reviewer_b",
+    decision: "deviation",
+    score: 10,
+    comment: "国产化兼容矩阵缺少国产数据库版本边界说明。",
+    createdAt: "2026-10-02T11:00:00+08:00",
+  },
 ];
 
 const clarifications: Clarification[] = [
@@ -324,7 +341,8 @@ const makeResponse = (
 ): SupplierResponse => {
   const supplier = suppliers[supplierIndex];
   const id = `${clause.id}-${supplier.id}`;
-  const defaultStatus: ComplianceStatus = clause.type === "mandatory" ? "compliant" : "pending";
+  const defaultStatus: ComplianceStatus =
+    clause.type === "mandatory" ? "compliant" : "pending";
   const maxScore = clause.weight;
   const scorePattern = [
     Math.round(maxScore * 0.8),
@@ -344,12 +362,14 @@ const makeResponse = (
         : `${supplier.name}提交响应正文，并声明可满足条款要求，分值依据需评审员复核。`,
     claimedScore: override.claimedScore ?? scorePattern[supplierIndex] ?? 0,
     attachmentName:
-      override.attachmentName ?? `${supplier.name}-${clause.code}-证明材料.pdf`,
+      override.attachmentName ??
+      `${supplier.name}-${clause.code}-证明材料.pdf`,
     proofFingerprint:
       override.proofFingerprint ?? `PROOF-${clause.id}-${supplier.id}`,
     submittedBy: `${supplier.name}投标专员`,
     submittedAt: `2026-09-${String(22 + ((clauseIndex + supplierIndex) % 4)).padStart(2, "0")}T16:20:00+08:00`,
     reviewRound: 1,
+    revision: id === "C006-SUP-B" ? 2 : 1,
     reviews: [],
     clarifications: [],
   };
@@ -376,7 +396,7 @@ const versions = [
     label: "初审问题定位版本",
     status: "finalized" as const,
     createdAt: "2026-09-25T17:30:00+08:00",
-    createdBy: "采购工作组",
+    createdBy: "采购负责人",
     signedBy: ["采购负责人", "技术评审组长"],
     clauseCount: clauses.length,
     responseCount: responses.length,
@@ -429,6 +449,117 @@ const auditLogs: AuditLog[] = [
     entity: "VER-002",
     detail: "创建 V2 工作版本，保留 V1 定稿快照。",
   },
+  {
+    id: "AUD-005",
+    at: "2026-09-28T09:10:00+08:00",
+    actor: "陈评审",
+    action: "提交独立意见",
+    entity: "C002-SUP-A",
+    detail: "A.1.1 项目经理及关键人员判定为 compliant，评分 0。",
+  },
+  {
+    id: "AUD-006",
+    at: "2026-09-28T11:10:00+08:00",
+    actor: "陈评审",
+    action: "提交独立意见",
+    entity: "C003-SUP-A",
+    detail: "A.1.2 实施进度与里程碑判定为 compliant，评分 13。",
+  },
+  {
+    id: "AUD-007",
+    at: "2026-09-28T11:40:00+08:00",
+    actor: "李评审",
+    action: "提交独立意见",
+    entity: "C003-SUP-A",
+    detail: "A.1.2 实施进度与里程碑判定为 compliant，评分 10。",
+  },
+  {
+    id: "AUD-008",
+    at: "2026-09-28T13:15:00+08:00",
+    actor: "陈评审",
+    action: "提交独立意见",
+    entity: "C004-SUP-B",
+    detail: "B.1 技术架构与互操作性判定为 compliant，评分 21。",
+  },
+  // 刻意缺少 C004-SUP-B 李评审 14:02 意见的日志：意见已入库、日志缺失。
+  {
+    id: "AUD-009",
+    at: "2026-09-28T14:30:00+08:00",
+    actor: "采购专员",
+    action: "发起澄清",
+    entity: "CL-002",
+    detail: "要求北辰信息提供等保测评结论页。",
+  },
+  {
+    id: "AUD-010",
+    at: "2026-09-26T15:00:00+08:00",
+    actor: "采购专员",
+    action: "发起澄清",
+    entity: "CL-003",
+    detail: "要求南岭科技补充漏洞通报流程截图。",
+  },
+  {
+    id: "AUD-011",
+    at: "2026-09-27T14:20:00+08:00",
+    actor: "采购专员",
+    action: "回复澄清",
+    entity: "CL-003",
+    detail: "第 2 轮澄清已回复，等待评审员复核。",
+  },
+  {
+    id: "AUD-012",
+    at: "2026-10-02T11:00:00+08:00",
+    actor: "李评审",
+    action: "提交独立意见",
+    entity: "C006-SUP-B",
+    detail: "B.1.2 国产化兼容性判定为 deviation，评分 10。",
+  },
+];
+
+// 进程中断前已落盘、但尚未提交的审计批次：
+// - BATCH-SEED-OPEN 可在重启后安全重放（修订号未变化）。
+// - BATCH-SEED-CONFLICT 重放时发现响应已被另一窗口修订，按规则隔离。
+const seedBatches: AuditBatch[] = [
+  {
+    id: "BATCH-SEED-OPEN",
+    revision: 1,
+    operation: "submit_assessment",
+    opSeq: 1,
+    status: "prepared",
+    createdAt: "2026-10-02T09:00:00+08:00",
+    actor: "陈评审",
+    role: "reviewer_a",
+    expectedRevision: 1,
+    responseId: "C005-SUP-B",
+    payload: {
+      responseId: "C005-SUP-B",
+      decision: "compliant",
+      score: 0,
+      comment: "接口协议材料完整，HTTPS、OAuth 2.0 与 OpenAPI 描述均可核验。",
+      reviewer: "陈评审",
+      role: "reviewer_a",
+    },
+  },
+  {
+    id: "BATCH-SEED-CONFLICT",
+    revision: 2,
+    operation: "submit_assessment",
+    opSeq: 1,
+    status: "prepared",
+    createdAt: "2026-10-02T10:00:00+08:00",
+    actor: "陈评审",
+    role: "reviewer_a",
+    expectedRevision: 1,
+    responseId: "C006-SUP-B",
+    payload: {
+      responseId: "C006-SUP-B",
+      decision: "compliant",
+      score: 12,
+      comment: "兼容矩阵覆盖主流国产操作系统，建议补充数据库版本边界。",
+      reviewer: "陈评审",
+      role: "reviewer_a",
+    },
+  },
 ];
 
 const buildSeed = (): ReviewDatabase => ({
@@ -437,18 +568,49 @@ const buildSeed = (): ReviewDatabase => ({
   versions: structuredClone(versions),
   auditLogs: structuredClone(auditLogs),
   suppliers: structuredClone(suppliers),
+  batches: structuredClone(seedBatches),
+  reconciliation: {
+    summary: {
+      reconciledAt: "",
+      totalBatches: 0,
+      unfinishedBatches: 0,
+      replayedBatches: 0,
+      backfilledBatches: 0,
+      quarantinedResponses: 0,
+      quarantinedVersions: 0,
+      pendingIssues: 0,
+      resolvedIssues: 0,
+    },
+    issues: [],
+    resolutions: [],
+    lastStartupReplay: "",
+  },
+  globalRevision: 1,
+  schemaVersion: 2,
 });
 
+/** 同步原子写：先写临时文件再 rename，避免磁盘异常留下半截 JSON。 */
+const atomicWrite = (file: string, content: string): void => {
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, content, "utf8");
+  renameSync(tmp, file);
+};
+
 class ReviewDataStore {
-  private readonly runtimePath = join(process.cwd(), "server", "runtime-data.json");
+  private readonly runtimePath = join(
+    process.cwd(),
+    "server",
+    "runtime-data.json",
+  );
   private data: ReviewDatabase;
 
   constructor() {
     if (existsSync(this.runtimePath)) {
       try {
-        this.data = JSON.parse(
+        const parsed = JSON.parse(
           readFileSync(this.runtimePath, "utf8"),
         ) as ReviewDatabase;
+        this.data = this.migrate(parsed);
       } catch {
         this.data = buildSeed();
       }
@@ -457,44 +619,91 @@ class ReviewDataStore {
     }
   }
 
+  private migrate(database: ReviewDatabase): ReviewDatabase {
+    const base = buildSeed();
+    const migrated: ReviewDatabase = {
+      ...base,
+      ...database,
+      clauses: database.clauses ?? base.clauses,
+      responses: (database.responses ?? []).map((response) => ({
+        ...{ reviews: [], clarifications: [], revision: 1 },
+        ...response,
+      })),
+      versions: database.versions ?? base.versions,
+      auditLogs: database.auditLogs ?? [],
+      suppliers: database.suppliers ?? base.suppliers,
+      batches: database.batches ?? [],
+      reconciliation: database.reconciliation ?? base.reconciliation,
+    };
+    if (typeof migrated.globalRevision !== "number") {
+      migrated.globalRevision = 1;
+    }
+    return migrated;
+  }
+
+  /**
+   * 启动恢复流水线（由 bootstrap 注入钩子，避免 data ↔ batches 循环依赖）：
+   * 1. 旧数据回填批次号；2. 重放未完成批次；3. 全量对账并隔离异常。
+   */
+  recover(hooks: {
+    replay: () => number;
+    backfill: () => number;
+    reconcile: (
+      database: ReviewDatabase,
+      stats: { replayedBatches: number; backfilledBatches: number },
+    ) => ReviewDatabase["reconciliation"];
+  }): void {
+    const backfilledBatches = hooks.backfill();
+    const replayedBatches = hooks.replay();
+    this.data.reconciliation = hooks.reconcile(this.data, {
+      replayedBatches,
+      backfilledBatches,
+    });
+    this.data.reconciliation.lastStartupReplay =
+      new Date().toISOString();
+    this.persist();
+  }
+
+  /** 供启动恢复流程做两阶段落盘。 */
+  readonly checkpoint = (): void => {
+    this.persist();
+  };
+
   snapshot(): ReviewDatabase {
     return structuredClone(this.data);
   }
 
-  mutate<T>(work: (database: ReviewDatabase) => T): T {
-    const result = work(this.data);
-    writeFileSync(this.runtimePath, JSON.stringify(this.data, null, 2), "utf8");
+  /**
+   * 单线程互斥事务。work 内可调用 checkpoint 做两阶段落盘
+   * （prepared 先落盘，业务数据 + 审计日志 + committed 再落盘）。
+   */
+  mutate<T>(
+    work: (database: ReviewDatabase, checkpoint: () => void) => T,
+  ): T {
+    const result = work(this.data, this.checkpoint);
+    this.persist();
     return result;
+  }
+
+  transaction<T>(
+    work: (database: ReviewDatabase, checkpoint: () => void) => T,
+  ): T {
+    return this.mutate(work);
+  }
+
+  private persist(): void {
+    atomicWrite(
+      this.runtimePath,
+      JSON.stringify(this.data, null, 2),
+    );
   }
 
   reset(): ReviewDatabase {
     this.data = buildSeed();
-    writeFileSync(this.runtimePath, JSON.stringify(this.data, null, 2), "utf8");
     return this.snapshot();
   }
 }
 
 export const reviewDataStore = new ReviewDataStore();
 
-export const createAudit = (
-  database: ReviewDatabase,
-  actor: string,
-  action: string,
-  entity: string,
-  detail: string,
-): void => {
-  database.auditLogs.unshift({
-    id: `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    at: new Date().toISOString(),
-    actor,
-    action,
-    entity,
-    detail,
-  });
-};
-
-export const createOpinionId = (): string =>
-  `OP-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-
-export const createClarificationId = (): string =>
-  `CL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+export type { ReviewerOpinion };
