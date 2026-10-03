@@ -20,6 +20,7 @@ import {
   selectError,
   selectLoading,
   selectPendingClarifications,
+  selectReconciliation,
   selectRole,
   selectVersions,
 } from "../../core/state/review.selectors";
@@ -77,6 +78,15 @@ export class DashboardPage {
   readonly pendingClarifications = toSignal(
     this.store.select(selectPendingClarifications),
     { initialValue: [] as PendingIssue[] },
+  );
+  readonly reconciliation = toSignal(this.store.select(selectReconciliation), {
+    initialValue: undefined,
+  });
+  readonly pendingQuarantine = computed(
+    () =>
+      this.reconciliation()?.quarantine.filter(
+        (item) => item.status === "pending",
+      ) ?? [],
   );
   readonly differences = computed(() =>
     this.clauses().flatMap((clause) =>

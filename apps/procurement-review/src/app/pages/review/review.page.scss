@@ -1,6 +1,6 @@
 .version-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 
@@ -26,6 +26,28 @@
   strong.danger {
     color: #ae291f;
   }
+}
+
+.quarantine-panel {
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.quarantine-note {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid #ecd9b0;
+  background: #fff8e8;
+  color: #744600;
+  font-size: 12px;
+}
+
+.finalize-hint {
+  display: block;
+  margin-top: 6px;
+  color: #ae291f;
+  font-size: 12px;
+  text-align: right;
 }
 
 .review-grid {

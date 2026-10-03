@@ -34,8 +34,14 @@
       <strong>{{ logs().length }}</strong>
     </article>
     <article>
-      <span>已定稿版本</span>
-      <strong>{{ finalizedCount() }}</strong>
+      <span>审计批次</span>
+      <strong>{{ reconciliation()?.batchCount ?? 0 }}</strong>
+    </article>
+    <article>
+      <span>隔离待核</span>
+      <strong [class.danger]="(reconciliation()?.pendingQuarantine ?? 0) > 0">
+        {{ reconciliation()?.pendingQuarantine ?? 0 }}
+      </strong>
     </article>
     <article>
       <span>当前导出条数</span>
@@ -47,6 +53,33 @@
       <small>{{ finalVersion()?.label ?? "尚未签字定稿" }}</small>
     </article>
   </div>
+
+  @if (reconciliation(); as report) {
+    <section class="data-panel reconciliation-strip-panel">
+      <div class="reconciliation-strip">
+        <div>
+          <span>最近对账</span>
+          <strong class="mono">
+            {{ report.lastRunAt | date: "yyyy-MM-dd HH:mm:ss" }}
+          </strong>
+        </div>
+        <div>
+          <span>重放批次</span>
+          <strong>{{ report.replayedBatches }}</strong>
+        </div>
+        <div>
+          <span>旧数据回填</span>
+          <strong>{{ report.backfilledBatches }}</strong>
+        </div>
+        <div>
+          <span>隔离待核</span>
+          <strong [class.danger]="report.pendingQuarantine > 0">
+            {{ report.pendingQuarantine }}
+          </strong>
+        </div>
+      </div>
+    </section>
+  }
 
   <section class="data-panel filter-panel">
     <div class="audit-filters">
@@ -83,7 +116,7 @@
     <div class="data-panel-header">
       <div>
         <h3>审计事件明细</h3>
-        <p>按时间倒序保存 GraphQL mutation 和版本操作</p>
+        <p>按时间倒序保存 GraphQL mutation 和版本操作，每条事件可回溯到审计批次</p>
       </div>
     </div>
     <p-table
@@ -98,6 +131,7 @@
           <th>操作人</th>
           <th>动作</th>
           <th>对象</th>
+          <th>批次号</th>
           <th>详情</th>
         </tr>
       </ng-template>
@@ -109,12 +143,13 @@
             <span class="table-primary">{{ log.action }}</span>
           </td>
           <td class="mono">{{ log.entity }}</td>
+          <td class="mono">{{ log.batchId ?? "—" }}</td>
           <td>{{ log.detail }}</td>
         </tr>
       </ng-template>
       <ng-template pTemplate="emptymessage">
         <tr>
-          <td colspan="5">没有符合条件的审计事件。</td>
+          <td colspan="6">没有符合条件的审计事件。</td>
         </tr>
       </ng-template>
     </p-table>

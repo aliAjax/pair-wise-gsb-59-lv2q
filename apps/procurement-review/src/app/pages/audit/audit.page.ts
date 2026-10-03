@@ -7,9 +7,12 @@ import { ButtonModule } from "primeng/button";
 import { InputTextModule } from "primeng/inputtext";
 import { SelectModule } from "primeng/select";
 import { TableModule } from "primeng/table";
+import { TagModule } from "primeng/tag";
 import { ReviewActions } from "../../core/state/review.actions";
 import {
   selectAuditLogs,
+  selectBatches,
+  selectReconciliation,
   selectRole,
   selectVersions,
 } from "../../core/state/review.selectors";
@@ -24,6 +27,7 @@ import { roleProfiles } from "../../core/models/review.models";
     InputTextModule,
     SelectModule,
     TableModule,
+    TagModule,
   ],
   templateUrl: "./audit.page.html",
   styleUrl: "./audit.page.scss",
@@ -37,6 +41,12 @@ export class AuditPage {
     initialValue: [],
   });
   readonly versions = toSignal(this.store.select(selectVersions), {
+    initialValue: [],
+  });
+  readonly reconciliation = toSignal(this.store.select(selectReconciliation), {
+    initialValue: undefined,
+  });
+  readonly batches = toSignal(this.store.select(selectBatches), {
     initialValue: [],
   });
   readonly role = toSignal(this.store.select(selectRole), {
@@ -57,7 +67,7 @@ export class AuditPage {
       const matchesAction = action === "all" || log.action === action;
       const matchesKeyword =
         !keyword ||
-        [log.actor, log.action, log.entity, log.detail]
+        [log.actor, log.action, log.entity, log.detail, log.batchId ?? ""]
           .join(" ")
           .toLowerCase()
           .includes(keyword);
@@ -72,20 +82,31 @@ export class AuditPage {
   );
 
   exportJson(): void {
+    // 导出与总览、条款页、复核队列同源的对账结果，保证口径一致。
     this.download(
       "procurement-review-audit.json",
-      JSON.stringify(this.filteredLogs(), null, 2),
+      JSON.stringify(
+        {
+          exportedAt: new Date().toISOString(),
+          reconciliation: this.reconciliation() ?? null,
+          batches: this.batches(),
+          logs: this.filteredLogs(),
+        },
+        null,
+        2,
+      ),
       "application/json;charset=utf-8",
     );
   }
 
   exportCsv(): void {
-    const header = ["时间", "操作人", "动作", "对象", "详情"];
+    const header = ["时间", "操作人", "动作", "对象", "批次号", "详情"];
     const rows = this.filteredLogs().map((log) => [
       log.at,
       log.actor,
       log.action,
       log.entity,
+      log.batchId ?? "",
       log.detail,
     ]);
     const csv = [header, ...rows]

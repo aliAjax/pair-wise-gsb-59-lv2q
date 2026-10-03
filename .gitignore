@@ -3,4 +3,6 @@ dist
 .nx
 .angular
 server/runtime-data.json
+server/audit-log.json
+server/batch-journal.json
 *.log

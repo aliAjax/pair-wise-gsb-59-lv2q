@@ -54,7 +54,103 @@
         <strong class="version">{{ stats.activeVersion }}</strong>
         <small>定稿后锁定快照</small>
       </article>
+      <article class="metric">
+        <span>隔离与待核</span>
+        <strong [class.danger]="pendingQuarantine().length > 0">
+          {{ pendingQuarantine().length }}
+        </strong>
+        <small>对账不一致，待组长确认修复</small>
+      </article>
     </div>
+
+    @if (reconciliation(); as report) {
+      <section class="data-panel reconciliation-panel">
+        <div class="data-panel-header">
+          <div>
+            <h3>启动对账结果</h3>
+            <p>
+              业务数据与审计日志分文件写入，重启时重放未完成批次并对账；总览、条款页、复核队列与导出读取同一结果。
+            </p>
+          </div>
+          <p-tag
+            [value]="
+              report.pendingQuarantine
+                ? report.pendingQuarantine + ' 项待核'
+                : '对账一致'
+            "
+            [severity]="report.pendingQuarantine ? 'danger' : 'success'"
+          />
+        </div>
+        <div class="reconciliation-strip">
+          <div>
+            <span>最近对账</span>
+            <strong class="mono">
+              {{ report.lastRunAt | date: "yyyy-MM-dd HH:mm:ss" }}
+            </strong>
+          </div>
+          <div>
+            <span>审计批次</span>
+            <strong>{{ report.batchCount }}</strong>
+          </div>
+          <div>
+            <span>重放批次</span>
+            <strong>{{ report.replayedBatches }}</strong>
+          </div>
+          <div>
+            <span>旧数据回填</span>
+            <strong>{{ report.backfilledBatches }}</strong>
+          </div>
+          <div>
+            <span>隔离待核</span>
+            <strong [class.danger]="report.pendingQuarantine > 0">
+              {{ report.pendingQuarantine }}
+            </strong>
+          </div>
+        </div>
+        @if (pendingQuarantine().length) {
+          <p-table
+            [value]="pendingQuarantine()"
+            [paginator]="true"
+            [rows]="5"
+            responsiveLayout="scroll"
+            styleClass="compact-table"
+          >
+            <ng-template pTemplate="header">
+              <tr>
+                <th>编号</th>
+                <th>对象</th>
+                <th>原因</th>
+                <th>处理</th>
+              </tr>
+            </ng-template>
+            <ng-template pTemplate="body" let-item>
+              <tr>
+                <td class="mono">{{ item.id }}</td>
+                <td>
+                  <span class="mono">{{ item.entityId }}</span>
+                  <div class="table-secondary">
+                    {{ item.entityType === "version" ? "评审版本" : "供应商响应" }}
+                  </div>
+                </td>
+                <td>
+                  <span class="table-primary">{{ item.reason }}</span>
+                  <div class="table-secondary">{{ item.detail }}</div>
+                </td>
+                <td>
+                  <p-button
+                    label="复核队列"
+                    size="small"
+                    severity="warn"
+                    [outlined]="true"
+                    routerLink="/review"
+                  />
+                </td>
+              </tr>
+            </ng-template>
+          </p-table>
+        }
+      </section>
+    }
 
     <div class="dashboard-grid">
       <section class="data-panel progress-panel">

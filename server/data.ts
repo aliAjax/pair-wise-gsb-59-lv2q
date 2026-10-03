@@ -1,5 +1,3 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type {
   AuditLog,
   Clarification,
@@ -7,7 +5,6 @@ import type {
   ComplianceStatus,
   ReviewDatabase,
   ReviewRole,
-  ReviewerOpinion,
   SupplierResponse,
 } from "./types";
 
@@ -350,6 +347,7 @@ const makeResponse = (
     submittedBy: `${supplier.name}投标专员`,
     submittedAt: `2026-09-${String(22 + ((clauseIndex + supplierIndex) % 4)).padStart(2, "0")}T16:20:00+08:00`,
     reviewRound: 1,
+    revision: 1,
     reviews: [],
     clarifications: [],
   };
@@ -431,70 +429,17 @@ const auditLogs: AuditLog[] = [
   },
 ];
 
-const buildSeed = (): ReviewDatabase => ({
-  clauses: structuredClone(clauses),
-  responses: structuredClone(responses),
-  versions: structuredClone(versions),
-  auditLogs: structuredClone(auditLogs),
-  suppliers: structuredClone(suppliers),
-});
-
-class ReviewDataStore {
-  private readonly runtimePath = join(process.cwd(), "server", "runtime-data.json");
-  private data: ReviewDatabase;
-
-  constructor() {
-    if (existsSync(this.runtimePath)) {
-      try {
-        this.data = JSON.parse(
-          readFileSync(this.runtimePath, "utf8"),
-        ) as ReviewDatabase;
-      } catch {
-        this.data = buildSeed();
-      }
-    } else {
-      this.data = buildSeed();
-    }
-  }
-
-  snapshot(): ReviewDatabase {
-    return structuredClone(this.data);
-  }
-
-  mutate<T>(work: (database: ReviewDatabase) => T): T {
-    const result = work(this.data);
-    writeFileSync(this.runtimePath, JSON.stringify(this.data, null, 2), "utf8");
-    return result;
-  }
-
-  reset(): ReviewDatabase {
-    this.data = buildSeed();
-    writeFileSync(this.runtimePath, JSON.stringify(this.data, null, 2), "utf8");
-    return this.snapshot();
-  }
+export interface SeedData {
+  data: ReviewDatabase;
+  auditLogs: AuditLog[];
 }
 
-export const reviewDataStore = new ReviewDataStore();
-
-export const createAudit = (
-  database: ReviewDatabase,
-  actor: string,
-  action: string,
-  entity: string,
-  detail: string,
-): void => {
-  database.auditLogs.unshift({
-    id: `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    at: new Date().toISOString(),
-    actor,
-    action,
-    entity,
-    detail,
-  });
-};
-
-export const createOpinionId = (): string =>
-  `OP-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-
-export const createClarificationId = (): string =>
-  `CL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+export const buildSeed = (): SeedData => ({
+  data: {
+    clauses: structuredClone(clauses),
+    responses: structuredClone(responses),
+    versions: structuredClone(versions),
+    suppliers: structuredClone(suppliers),
+  },
+  auditLogs: structuredClone(auditLogs),
+});

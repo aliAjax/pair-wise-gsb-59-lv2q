@@ -7,6 +7,7 @@ export const initialReviewState: ReviewState = {
   versions: [],
   auditLogs: [],
   suppliers: [],
+  batches: [],
   filters: {
     keyword: "",
     category: "",
@@ -70,11 +71,37 @@ export const reviewReducer = createReducer(
     toast: undefined,
     error: undefined,
   })),
+  on(ReviewActions.revisionConflict, (state, { conflict }) => ({
+    ...state,
+    saving: false,
+    conflict,
+    error: conflict.message,
+    clauses: state.clauses.map((clause) => ({
+      ...clause,
+      responses: clause.responses.map((response) =>
+        response.id === conflict.responseId
+          ? {
+              ...response,
+              revision: conflict.currentRevision,
+              status: conflict.status,
+              reviewRound: conflict.reviewRound,
+              reviews: conflict.reviews,
+            }
+          : response,
+      ),
+    })),
+  })),
+  on(ReviewActions.dismissConflict, (state) => ({
+    ...state,
+    conflict: undefined,
+    error: undefined,
+  })),
   on(
     ReviewActions.submitAssessment,
     ReviewActions.requestClarification,
     ReviewActions.respondClarification,
     ReviewActions.finalizeVersion,
+    ReviewActions.resolveQuarantine,
     ReviewActions.resetReviewData,
     (state) => ({
       ...state,

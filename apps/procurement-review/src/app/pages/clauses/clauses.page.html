@@ -12,7 +12,7 @@
         icon="pi pi-comments"
         severity="secondary"
         [outlined]="true"
-        [disabled]="!selectedResponse()"
+        [disabled]="!selectedResponse() || !!responseQuarantine()"
         (onClick)="openClarificationDialog()"
       />
       <p-button
@@ -97,6 +97,28 @@
         </section>
 
         @if (selectedResponse(); as response) {
+          @if (responseQuarantine(); as quarantine) {
+            <div class="quarantine-banner">
+              <i class="pi pi-shield"></i>
+              <div>
+                <strong>
+                  该响应已被{{ quarantine.kind === "isolated" ? "隔离" : "列入待核" }}
+                  （{{ quarantine.id }}）
+                </strong>
+                <span>
+                  {{ quarantine.reason }}：{{ quarantine.detail }}
+                  需评审组长在复核队列确认修复后才能继续操作。
+                </span>
+              </div>
+              <p-button
+                label="查看复核队列"
+                size="small"
+                severity="warn"
+                [outlined]="true"
+                routerLink="/review"
+              />
+            </div>
+          }
           <div class="response-grid">
             <section class="data-panel response-content">
               <div class="data-panel-header">
@@ -127,6 +149,10 @@
                   <div>
                     <dt>评审轮次</dt>
                     <dd>第 {{ response.reviewRound }} 轮</dd>
+                  </div>
+                  <div>
+                    <dt>修订号</dt>
+                    <dd class="mono">r{{ response.revision }}</dd>
                   </div>
                 </dl>
 
@@ -201,6 +227,11 @@
                     采购人员可维护条款和发起澄清，不能代替评审员提交符合性结论。
                   </div>
                 }
+                @if (responseQuarantine()) {
+                  <div class="permission-note">
+                    该响应处于隔离待核状态，仅评审组长确认修复后可恢复提交。
+                  </div>
+                }
                 <div class="field">
                   <label for="decision">符合性结论</label>
                   <p-select
@@ -250,7 +281,7 @@
                   type="submit"
                   label="提交独立意见"
                   icon="pi pi-check"
-                  [disabled]="!canReview()"
+                  [disabled]="!canReview() || !!responseQuarantine()"
                   [loading]="false"
                   styleClass="full-button"
                 />
@@ -313,4 +344,56 @@
       />
     </div>
   </form>
+</p-dialog>
+
+<p-dialog
+  header="响应已被他人修改"
+  [modal]="true"
+  [visible]="!!activeConflict()"
+  (visibleChange)="!$event && dismissConflict()"
+  [style]="{ width: 'min(620px, 94vw)' }"
+>
+  @if (activeConflict(); as conflict) {
+    <div class="conflict-body">
+      <p class="conflict-message">
+        <i class="pi pi-exclamation-triangle"></i>
+        {{ conflict.message }}
+      </p>
+      <h4>对方已提交的改动（修订 r{{ conflict.currentRevision }}）</h4>
+      @if (conflict.reviews.length) {
+        <div class="opinion-list">
+          @for (review of conflict.reviews; track review.id) {
+            <article>
+              <header>
+                <strong>{{ review.reviewer }}</strong>
+                <app-status-tag [status]="review.decision" />
+                <span>{{ review.score }} 分</span>
+                <time>{{ review.createdAt | date: "MM-dd HH:mm" }}</time>
+              </header>
+              <p>{{ review.comment }}</p>
+            </article>
+          }
+        </div>
+      } @else {
+        <p class="muted">对方修改了响应状态，尚未留下评审意见。</p>
+      }
+      <p class="conflict-hint">
+        你的输入已保留在表单中。重新提交将基于修订 r{{ conflict.currentRevision }}，
+        双方意见都会保留。
+      </p>
+      <div class="inline-actions dialog-actions">
+        <p-button
+          label="继续编辑"
+          severity="secondary"
+          [outlined]="true"
+          (onClick)="dismissConflict()"
+        />
+        <p-button
+          label="基于最新修订重新提交"
+          icon="pi pi-check"
+          (onClick)="retryAfterConflict()"
+        />
+      </div>
+    </div>
+  }
 </p-dialog>

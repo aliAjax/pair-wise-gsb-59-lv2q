@@ -6,12 +6,19 @@
         保留每位评审员的独立意见；分歧进入小组复核，已定稿版本不可覆盖。
       </p>
     </div>
-    <p-button
-      label="汇总签字定稿"
-      icon="pi pi-verified"
-      [disabled]="!canFinalize()"
-      (onClick)="openFinalize()"
-    />
+    <div>
+      <p-button
+        label="汇总签字定稿"
+        icon="pi pi-verified"
+        [disabled]="!canFinalize()"
+        (onClick)="openFinalize()"
+      />
+      @if (isChair() && pendingQuarantine().length) {
+        <small class="finalize-hint">
+          有 {{ pendingQuarantine().length }} 项隔离待核未处理，不能定稿
+        </small>
+      }
+    </div>
   </header>
 
   <div class="version-summary">
@@ -31,7 +38,93 @@
       <span>未完成澄清</span>
       <strong class="danger">{{ pendingClarifications().length }}</strong>
     </article>
+    <article>
+      <span>隔离与待核</span>
+      <strong class="danger">{{ pendingQuarantine().length }}</strong>
+    </article>
   </div>
+
+  @if (quarantine().length) {
+    <section class="data-panel quarantine-panel">
+      <div class="data-panel-header">
+        <div>
+          <h3>隔离与待核队列</h3>
+          <p>
+            对账发现的不一致响应和版本先隔离，由评审组长确认修复；采购人员和评审员不能越权处理。
+          </p>
+        </div>
+        <p-tag
+          [value]="pendingQuarantine().length + ' 项待处理'"
+          [severity]="pendingQuarantine().length ? 'danger' : 'success'"
+        />
+      </div>
+      <p-table [value]="quarantine()" responsiveLayout="scroll">
+        <ng-template pTemplate="header">
+          <tr>
+            <th>编号</th>
+            <th>类型</th>
+            <th>对象</th>
+            <th>原因</th>
+            <th>检出时间</th>
+            <th>状态</th>
+            <th>处理</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-item>
+          <tr>
+            <td class="mono">{{ item.id }}</td>
+            <td>
+              <p-tag
+                [value]="kindLabel(item)"
+                [severity]="item.kind === 'isolated' ? 'danger' : 'warn'"
+              />
+              <div class="table-secondary">
+                {{ item.entityType === "version" ? "评审版本" : "供应商响应" }}
+              </div>
+            </td>
+            <td class="mono">{{ item.entityId }}</td>
+            <td>
+              <span class="table-primary">{{ item.reason }}</span>
+              <div class="table-secondary">{{ item.detail }}</div>
+            </td>
+            <td class="mono">{{ item.detectedAt | date: "MM-dd HH:mm" }}</td>
+            <td>
+              <p-tag
+                [value]="statusLabel(item)"
+                [severity]="item.status === 'pending' ? 'warn' : 'success'"
+              />
+            </td>
+            <td>
+              @if (item.status === "pending") {
+                <p-button
+                  label="确认修复"
+                  size="small"
+                  severity="warn"
+                  [outlined]="true"
+                  [disabled]="!isChair()"
+                  (onClick)="openResolve(item)"
+                />
+              } @else {
+                <div class="table-secondary">
+                  {{ item.resolution }}
+                </div>
+                <div class="table-secondary">
+                  {{ item.resolvedBy }} ·
+                  {{ item.resolvedAt | date: "MM-dd HH:mm" }}
+                </div>
+              }
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+      @if (!isChair()) {
+        <p class="quarantine-note">
+          当前角色为{{ role() === "procurement" ? "采购人员" : "评审员" }}，不能越权处理隔离待核项，仅评审组长可确认修复。
+        </p>
+      }
+    </section>
+  }
+
 
   <div class="review-grid">
     <section class="data-panel versions-panel">
@@ -250,6 +343,57 @@
         label="保存回复"
         icon="pi pi-check"
         [disabled]="responseForm.invalid"
+      />
+    </div>
+  </form>
+</p-dialog>
+
+<p-dialog
+  header="确认修复隔离待核项"
+  [modal]="true"
+  [visible]="resolveVisible()"
+  (visibleChange)="resolveVisible.set($event)"
+  [style]="{ width: 'min(560px, 94vw)' }"
+>
+  <form [formGroup]="resolveForm" (ngSubmit)="resolveQuarantine()">
+    @if (selectedQuarantine(); as item) {
+      <div class="response-context">
+        <strong>{{ item.id }} · {{ item.entityId }}</strong>
+        <span>{{ item.reason }}</span>
+        <p>{{ item.detail }}</p>
+      </div>
+    }
+    <div class="field">
+      <label for="quarantine-resolution">修复说明</label>
+      <textarea
+        id="quarantine-resolution"
+        pTextarea
+        formControlName="resolution"
+        rows="4"
+        placeholder="说明核对结论与修复依据，将补登审计日志"
+      ></textarea>
+      @if (
+        resolveForm.controls.resolution.touched &&
+        resolveForm.controls.resolution.invalid
+      ) {
+        <small class="error">修复说明至少需要 4 个字符。</small>
+      }
+    </div>
+    <div class="finalize-note">
+      确认修复会生成独立审计批次并补登日志，仅评审组长可执行。
+    </div>
+    <div class="inline-actions dialog-actions">
+      <p-button
+        label="取消"
+        severity="secondary"
+        [outlined]="true"
+        (onClick)="resolveVisible.set(false)"
+      />
+      <p-button
+        type="submit"
+        label="确认修复"
+        icon="pi pi-shield"
+        [disabled]="resolveForm.invalid"
       />
     </div>
   </form>

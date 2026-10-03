@@ -5,8 +5,10 @@ import type {
   ClarificationInput,
   ClarificationResponseInput,
   FinalizeVersionInput,
+  ResolveQuarantineInput,
   ReviewRole,
   ReviewState,
+  RevisionConflict,
 } from "../models/review.models";
 
 export const ReviewActions = createActionGroup({
@@ -16,7 +18,13 @@ export const ReviewActions = createActionGroup({
     "Load Review Data Success": props<{
       workspace: Pick<
         ReviewState,
-        "clauses" | "versions" | "auditLogs" | "dashboard" | "suppliers"
+        | "clauses"
+        | "versions"
+        | "auditLogs"
+        | "dashboard"
+        | "suppliers"
+        | "reconciliation"
+        | "batches"
       >;
       toast?: string;
     }>(),
@@ -29,6 +37,9 @@ export const ReviewActions = createActionGroup({
     "Request Clarification": props<{ input: ClarificationInput }>(),
     "Respond Clarification": props<{ input: ClarificationResponseInput }>(),
     "Finalize Version": props<{ input: FinalizeVersionInput }>(),
+    "Resolve Quarantine": props<{ input: ResolveQuarantineInput }>(),
+    "Revision Conflict": props<{ conflict: RevisionConflict }>(),
+    "Dismiss Conflict": emptyProps(),
     "Reset Review Data": emptyProps(),
   },
 });

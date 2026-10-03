@@ -29,6 +29,7 @@ import { TextareaModule } from "primeng/textarea";
 import { TreeModule } from "primeng/tree";
 import {
   complianceLabels,
+  createOperationId,
   roleProfiles,
   type Clause,
   type ComplianceStatus,
@@ -38,6 +39,8 @@ import { ReviewActions } from "../../core/state/review.actions";
 import {
   hasReviewDifference,
   selectClauseTree,
+  selectConflict,
+  selectReconciliation,
   selectRole,
 } from "../../core/state/review.selectors";
 import {
@@ -81,6 +84,21 @@ export class ClausesPage {
   readonly role = toSignal(this.store.select(selectRole), {
     initialValue: "reviewer_a",
   });
+  readonly reconciliation = toSignal(this.store.select(selectReconciliation), {
+    initialValue: undefined,
+  });
+  readonly conflict = toSignal(this.store.select(selectConflict), {
+    initialValue: undefined,
+  });
+  /** 仅当冲突响应当前被选中时才弹出对照对话框。 */
+  readonly activeConflict = computed(() => {
+    const conflict = this.conflict();
+    const response = this.selectedResponse();
+    if (!conflict || !response || conflict.responseId !== response.id) {
+      return null;
+    }
+    return conflict;
+  });
   readonly selectedTreeKey = signal<string | null>(null);
   readonly selectedSupplierId = signal<string | null>(null);
   readonly clarificationVisible = signal(false);
@@ -105,6 +123,21 @@ export class ClausesPage {
     );
   });
   readonly canReview = computed(() => this.role() !== "procurement");
+  readonly responseQuarantine = computed(() => {
+    const response = this.selectedResponse();
+    const reconciliation = this.reconciliation();
+    if (!response || !reconciliation) {
+      return null;
+    }
+    return (
+      reconciliation.quarantine.find(
+        (item) =>
+          item.status === "pending" &&
+          item.entityType === "response" &&
+          item.entityId === response.id,
+      ) ?? null
+    );
+  });
   readonly clauseRisks = computed(() => {
     const clause = this.selectedClause();
     if (!clause) {
@@ -180,6 +213,22 @@ export class ClausesPage {
 
   readonly minimumClarificationDate = new Date();
 
+  /**
+   * 操作编号随表单内容变化而更新：未修改内容的重试复用同一编号，
+   * 服务端命中批次直接返回原结果，不重复追加意见或日志。
+   */
+  private assessmentOpId = createOperationId();
+  private clarificationOpId = createOperationId();
+
+  constructor() {
+    this.assessmentForm.valueChanges.subscribe(() => {
+      this.assessmentOpId = createOperationId();
+    });
+    this.clarificationForm.valueChanges.subscribe(() => {
+      this.clarificationOpId = createOperationId();
+    });
+  }
+
   nodeTemplateData(node: TreeNode): Clause {
     return node.data as Clause;
   }
@@ -203,7 +252,7 @@ export class ClausesPage {
       this.assessmentForm.markAllAsTouched();
       return;
     }
-    if (!this.canReview()) {
+    if (!this.canReview() || this.responseQuarantine()) {
       return;
     }
     const value = this.assessmentForm.getRawValue();
@@ -216,6 +265,8 @@ export class ClausesPage {
           comment: value.comment,
           reviewer: roleProfiles[this.role()].name,
           role: this.role(),
+          baseRevision: response.revision,
+          opId: this.assessmentOpId,
         },
       }),
     );
@@ -235,6 +286,9 @@ export class ClausesPage {
       this.clarificationForm.markAllAsTouched();
       return;
     }
+    if (this.responseQuarantine()) {
+      return;
+    }
     const value = this.clarificationForm.getRawValue();
     this.store.dispatch(
       ReviewActions.requestClarification({
@@ -243,10 +297,22 @@ export class ClausesPage {
           requestText: value.requestText,
           dueAt: value.dueAt.toISOString(),
           actor: roleProfiles[this.role()].name,
+          role: this.role(),
+          baseRevision: response.revision,
+          opId: this.clarificationOpId,
         },
       }),
     );
     this.clarificationVisible.set(false);
+  }
+
+  dismissConflict(): void {
+    this.store.dispatch(ReviewActions.dismissConflict());
+  }
+
+  retryAfterConflict(): void {
+    this.store.dispatch(ReviewActions.dismissConflict());
+    this.submitAssessment();
   }
 
   latestOpinion(

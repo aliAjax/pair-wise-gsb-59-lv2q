@@ -30,6 +30,28 @@ export const selectDashboard = createSelector(
   (state) => state.dashboard,
 );
 
+export const selectReconciliation = createSelector(
+  selectReviewState,
+  (state) => state.reconciliation,
+);
+
+export const selectBatches = createSelector(
+  selectReviewState,
+  (state) => state.batches,
+);
+
+export const selectConflict = createSelector(
+  selectReviewState,
+  (state) => state.conflict,
+);
+
+export const selectPendingQuarantine = createSelector(
+  selectReconciliation,
+  (reconciliation) =>
+    reconciliation?.quarantine.filter((item) => item.status === "pending") ??
+    [],
+);
+
 export const selectSuppliers = createSelector(
   selectReviewState,
   (state) => state.suppliers,

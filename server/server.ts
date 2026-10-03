@@ -1,12 +1,8 @@
 import { ApolloServer } from "@apollo/server";
 import { startStandaloneServer } from "@apollo/server/standalone";
-import {
-  createAudit,
-  createClarificationId,
-  createOpinionId,
-  reviewDataStore,
-} from "./data";
+import { GraphQLError } from "graphql";
 import { typeDefs } from "./schema";
+import { RevisionConflictError, reviewStore } from "./store";
 import type {
   AssessmentInput,
   ClarificationInput,
@@ -14,8 +10,8 @@ import type {
   Clause,
   DashboardStats,
   FinalizeVersionInput,
+  ResolveQuarantineInput,
   ReviewDatabase,
-  ReviewRole,
 } from "./types";
 
 const getDashboard = (database: ReviewDatabase): DashboardStats => {
@@ -66,25 +62,53 @@ const getDashboard = (database: ReviewDatabase): DashboardStats => {
   };
 };
 
-const requireRole = (role: ReviewRole, allowed: ReviewRole[]): void => {
-  if (!allowed.includes(role)) {
-    throw new Error("当前角色无权执行此操作。");
+/**
+ * 把存储层抛出的修订冲突转成带对方当前数据的 GraphQL 错误，
+ * 前端据此保留用户输入并展示对方改动。
+ */
+const rethrowAsGraphQLError = (error: unknown): never => {
+  if (error instanceof RevisionConflictError) {
+    throw new GraphQLError(error.message, {
+      extensions: {
+        code: "REVISION_CONFLICT",
+        conflict: error.conflict,
+      },
+    });
+  }
+  if (error instanceof Error) {
+    throw new GraphQLError(error.message, {
+      extensions: { code: "BATCH_REJECTED" },
+    });
+  }
+  throw error;
+};
+
+const commit = <T>(work: () => T): T => {
+  try {
+    return work();
+  } catch (error) {
+    return rethrowAsGraphQLError(error);
   }
 };
 
 const resolvers = {
   Query: {
     workspace: () => {
-      const database = reviewDataStore.snapshot();
+      const snapshot = reviewStore.snapshot();
       return {
-        ...database,
-        dashboard: getDashboard(database),
+        ...snapshot,
+        dashboard: getDashboard(snapshot),
       };
     },
-    dashboard: () => getDashboard(reviewDataStore.snapshot()),
+    dashboard: () => getDashboard(reviewStore.snapshot()),
+    reconciliation: () => reviewStore.reconciliation(),
   },
   Clause: {
-    responses: (clause: Clause, _args: unknown, context: { database: ReviewDatabase }) =>
+    responses: (
+      clause: Clause,
+      _args: unknown,
+      context: { database: ReviewDatabase },
+    ) =>
       context.database.responses.filter(
         (response) => response.clauseId === clause.id,
       ),
@@ -93,194 +117,68 @@ const resolvers = {
     submitAssessment: (
       _parent: unknown,
       { input }: { input: AssessmentInput },
-    ) => {
-      requireRole(input.role, ["reviewer_a", "reviewer_b", "chair"]);
-      if (input.comment.trim().length < 6) {
-        throw new Error("评审意见至少需要 6 个字符。");
-      }
-      return reviewDataStore.mutate((database) => {
-        const response = database.responses.find(
-          (item) => item.id === input.responseId,
-        );
-        if (!response) {
-          throw new Error("供应商响应不存在。");
-        }
-        const clause = database.clauses.find(
-          (item) => item.id === response.clauseId,
-        );
-        if (!clause) {
-          throw new Error("对应技术条款不存在。");
-        }
-        if (input.score < 0 || input.score > clause.weight) {
-          throw new Error(`评分必须在 0 至 ${clause.weight} 之间。`);
-        }
-        if (
-          clause.type === "scoring" &&
-          input.decision === "compliant" &&
-          input.score === 0
-        ) {
-          throw new Error("评分项判定为符合时必须填写评分。");
-        }
-        const opinion = {
-          id: createOpinionId(),
-          responseId: response.id,
-          reviewer: input.reviewer.trim(),
-          role: input.role,
-          decision: input.decision,
-          score: input.score,
-          comment: input.comment.trim(),
-          createdAt: new Date().toISOString(),
+    ) =>
+      commit(() => {
+        const batch = reviewStore.submitAssessment(input);
+        return {
+          opinion: batch.result,
+          batchId: batch.batchId,
+          revision: batch.revision,
+          replayed: batch.replayed,
         };
-        response.reviews.push(opinion);
-        response.status = input.decision;
-        response.reviewRound = Math.max(response.reviewRound, 1);
-        createAudit(
-          database,
-          opinion.reviewer,
-          "提交独立意见",
-          response.id,
-          `${clause.code} ${clause.title} 判定为 ${input.decision}，评分 ${input.score}。`,
-        );
-        return opinion;
-      });
-    },
+      }),
     requestClarification: (
       _parent: unknown,
       { input }: { input: ClarificationInput },
     ) =>
-      reviewDataStore.mutate((database) => {
-        const response = database.responses.find(
-          (item) => item.id === input.responseId,
-        );
-        if (!response) {
-          throw new Error("供应商响应不存在。");
-        }
-        if (input.requestText.trim().length < 6) {
-          throw new Error("澄清要求至少需要 6 个字符。");
-        }
-        const requestedAt = new Date();
-        const dueAt = new Date(input.dueAt);
-        if (Number.isNaN(dueAt.getTime()) || dueAt <= requestedAt) {
-          throw new Error("澄清截止时间必须晚于当前时间。");
-        }
-        const maximumDueAt = new Date(requestedAt);
-        maximumDueAt.setDate(maximumDueAt.getDate() + 7);
-        if (dueAt > maximumDueAt) {
-          throw new Error("澄清期限不得超过 7 个自然日。");
-        }
-        const round =
-          Math.max(
-            0,
-            ...response.clarifications.map((item) => item.round),
-          ) + 1;
-        const clarification = {
-          id: createClarificationId(),
-          responseId: response.id,
-          clauseId: response.clauseId,
-          round,
-          requestText: input.requestText.trim(),
-          requestedAt: requestedAt.toISOString(),
-          dueAt: dueAt.toISOString(),
-          status: "open" as const,
+      commit(() => {
+        const batch = reviewStore.requestClarification(input);
+        return {
+          clarification: batch.result,
+          batchId: batch.batchId,
+          revision: batch.revision,
+          replayed: batch.replayed,
         };
-        response.clarifications.push(clarification);
-        response.status = "clarification";
-        createAudit(
-          database,
-          input.actor,
-          "发起澄清",
-          clarification.id,
-          `${response.supplierName} ${response.clauseId} 第 ${round} 轮澄清已发起。`,
-        );
-        return clarification;
       }),
     respondClarification: (
       _parent: unknown,
       { input }: { input: ClarificationResponseInput },
     ) =>
-      reviewDataStore.mutate((database) => {
-        const clarification = database.responses
-          .flatMap((response) => response.clarifications)
-          .find((item) => item.id === input.clarificationId);
-        if (!clarification) {
-          throw new Error("澄清记录不存在。");
-        }
-        if (input.responseText.trim().length < 6) {
-          throw new Error("澄清回复至少需要 6 个字符。");
-        }
-        clarification.supplierResponse = input.responseText.trim();
-        clarification.respondedAt = new Date().toISOString();
-        clarification.status = "responded";
-        const response = database.responses.find(
-          (item) => item.id === clarification.responseId,
-        );
-        if (response) {
-          response.status = "pending";
-        }
-        createAudit(
-          database,
-          input.actor,
-          "回复澄清",
-          clarification.id,
-          `第 ${clarification.round} 轮澄清已回复，等待评审员复核。`,
-        );
-        return clarification;
+      commit(() => {
+        const batch = reviewStore.respondClarification(input);
+        return {
+          clarification: batch.result,
+          batchId: batch.batchId,
+          revision: batch.revision,
+          replayed: batch.replayed,
+        };
       }),
     finalizeVersion: (
       _parent: unknown,
       { input }: { input: FinalizeVersionInput },
     ) =>
-      reviewDataStore.mutate((database) => {
-        requireRole(input.role, ["chair"]);
-        if (input.label.trim().length < 4) {
-          throw new Error("版本名称至少需要 4 个字符。");
-        }
-        const blockingClarifications = database.responses
-          .flatMap((response) => response.clarifications)
-          .filter(
-            (clarification) =>
-              clarification.status === "open" ||
-              clarification.status === "overdue",
-          );
-        if (blockingClarifications.length > 0) {
-          throw new Error(
-            `仍有 ${blockingClarifications.length} 项未完成澄清，不能定稿。`,
-          );
-        }
-        const maxVersion =
-          database.versions.reduce((maximum, version) => {
-            const numeric = Number(version.version.replace(/\D/g, ""));
-            return Number.isFinite(numeric)
-              ? Math.max(maximum, numeric)
-              : maximum;
-          }, 0) + 1;
-        database.versions.forEach((version) => {
-          version.status = "finalized";
-        });
-        const version = {
-          id: `VER-${Date.now()}`,
-          version: `V${maxVersion}`,
-          label: input.label.trim(),
-          status: "finalized" as const,
-          createdAt: new Date().toISOString(),
-          createdBy: input.actor,
-          signedBy: [input.actor],
-          clauseCount: database.clauses.length,
-          responseCount: database.responses.length,
-          contentHash: Math.random().toString(16).slice(2, 10),
+      commit(() => {
+        const batch = reviewStore.finalizeVersion(input);
+        return {
+          version: batch.result,
+          batchId: batch.batchId,
+          replayed: batch.replayed,
         };
-        database.versions.unshift(version);
-        createAudit(
-          database,
-          input.actor,
-          "汇总签字定稿",
-          version.id,
-          `${version.version} ${version.label} 已锁定，签署人 ${input.actor}。`,
-        );
-        return version;
+      }),
+    resolveQuarantine: (
+      _parent: unknown,
+      { input }: { input: ResolveQuarantineInput },
+    ) =>
+      commit(() => {
+        const batch = reviewStore.resolveQuarantine(input);
+        return {
+          item: batch.result,
+          batchId: batch.batchId,
+          replayed: batch.replayed,
+        };
       }),
     resetReviewData: () => {
-      reviewDataStore.reset();
+      reviewStore.reset();
       return true;
     },
   },
@@ -295,10 +193,14 @@ async function startServer(): Promise<void> {
   const { url } = await startStandaloneServer(server, {
     listen: { port: 18462, host: "0.0.0.0" },
     context: async () => ({
-      database: reviewDataStore.snapshot(),
+      database: reviewStore.snapshot(),
     }),
   });
   console.log(`GraphQL mock server ready at ${url}`);
+  const report = reviewStore.reconciliation();
+  console.log(
+    `启动对账完成：批次 ${report.batchCount}，重放 ${report.replayedBatches}，回填 ${report.backfilledBatches}，隔离待核 ${report.pendingQuarantine}。`,
+  );
 }
 
 void startServer();

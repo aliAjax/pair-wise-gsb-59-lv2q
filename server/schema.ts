@@ -32,6 +32,22 @@ export const typeDefs = parse(`
     finalized
   }
 
+  enum BatchStatus {
+    pending
+    applied
+    backfilled
+  }
+
+  enum QuarantineKind {
+    isolated
+    pending_review
+  }
+
+  enum QuarantineStatus {
+    pending
+    resolved
+  }
+
   type Clause {
     id: ID!
     code: String!
@@ -55,6 +71,7 @@ export const typeDefs = parse(`
     score: Int!
     comment: String!
     createdAt: String!
+    batchId: String
   }
 
   type Clarification {
@@ -68,6 +85,7 @@ export const typeDefs = parse(`
     dueAt: String!
     respondedAt: String
     status: ClarificationStatus!
+    batchId: String
   }
 
   type SupplierResponse {
@@ -83,6 +101,7 @@ export const typeDefs = parse(`
     submittedBy: String!
     submittedAt: String!
     reviewRound: Int!
+    revision: Int!
     reviews: [ReviewerOpinion!]!
     clarifications: [Clarification!]!
   }
@@ -98,6 +117,7 @@ export const typeDefs = parse(`
     clauseCount: Int!
     responseCount: Int!
     contentHash: String!
+    batchId: String
   }
 
   type AuditLog {
@@ -107,6 +127,44 @@ export const typeDefs = parse(`
     action: String!
     entity: String!
     detail: String!
+    batchId: String
+  }
+
+  type AuditBatch {
+    id: ID!
+    opId: String!
+    action: String!
+    actor: String!
+    role: ReviewRole!
+    baseRevision: Int!
+    status: BatchStatus!
+    entityId: String!
+    resultRevision: Int
+    createdAt: String!
+    appliedAt: String
+  }
+
+  type QuarantineItem {
+    id: ID!
+    kind: QuarantineKind!
+    entityType: String!
+    entityId: String!
+    reason: String!
+    detail: String!
+    detectedAt: String!
+    status: QuarantineStatus!
+    resolution: String
+    resolvedBy: String
+    resolvedAt: String
+  }
+
+  type ReconciliationReport {
+    lastRunAt: String!
+    batchCount: Int!
+    replayedBatches: Int!
+    backfilledBatches: Int!
+    pendingQuarantine: Int!
+    quarantine: [QuarantineItem!]!
   }
 
   type DashboardStats {
@@ -130,6 +188,8 @@ export const typeDefs = parse(`
     auditLogs: [AuditLog!]!
     dashboard: DashboardStats!
     suppliers: [Supplier!]!
+    reconciliation: ReconciliationReport!
+    batches: [AuditBatch!]!
   }
 
   input AssessmentInput {
@@ -139,6 +199,8 @@ export const typeDefs = parse(`
     comment: String!
     reviewer: String!
     role: ReviewRole!
+    baseRevision: Int!
+    opId: String!
   }
 
   input ClarificationInput {
@@ -146,30 +208,73 @@ export const typeDefs = parse(`
     requestText: String!
     dueAt: String!
     actor: String!
+    role: ReviewRole!
+    baseRevision: Int!
+    opId: String!
   }
 
   input ClarificationResponseInput {
     clarificationId: ID!
     responseText: String!
     actor: String!
+    role: ReviewRole!
+    baseRevision: Int!
+    opId: String!
   }
 
   input FinalizeVersionInput {
     label: String!
     actor: String!
     role: ReviewRole!
+    opId: String!
+  }
+
+  input ResolveQuarantineInput {
+    quarantineId: ID!
+    resolution: String!
+    actor: String!
+    role: ReviewRole!
+    opId: String!
+  }
+
+  type AssessmentPayload {
+    opinion: ReviewerOpinion!
+    batchId: String!
+    revision: Int!
+    replayed: Boolean!
+  }
+
+  type ClarificationPayload {
+    clarification: Clarification!
+    batchId: String!
+    revision: Int!
+    replayed: Boolean!
+  }
+
+  type FinalizePayload {
+    version: ReviewVersion!
+    batchId: String!
+    replayed: Boolean!
+  }
+
+  type ResolveQuarantinePayload {
+    item: QuarantineItem!
+    batchId: String!
+    replayed: Boolean!
   }
 
   type Query {
     workspace: WorkspaceData!
     dashboard: DashboardStats!
+    reconciliation: ReconciliationReport!
   }
 
   type Mutation {
-    submitAssessment(input: AssessmentInput!): ReviewerOpinion!
-    requestClarification(input: ClarificationInput!): Clarification!
-    respondClarification(input: ClarificationResponseInput!): Clarification!
-    finalizeVersion(input: FinalizeVersionInput!): ReviewVersion!
+    submitAssessment(input: AssessmentInput!): AssessmentPayload!
+    requestClarification(input: ClarificationInput!): ClarificationPayload!
+    respondClarification(input: ClarificationResponseInput!): ClarificationPayload!
+    finalizeVersion(input: FinalizeVersionInput!): FinalizePayload!
+    resolveQuarantine(input: ResolveQuarantineInput!): ResolveQuarantinePayload!
     resetReviewData: Boolean!
   }
 `);

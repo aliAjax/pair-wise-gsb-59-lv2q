@@ -233,6 +233,70 @@ h4 {
   line-height: 1.5;
 }
 
+.quarantine-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid #e3b7b2;
+  border-radius: 8px;
+  background: #fdf1ef;
+  color: #8a2a1d;
+
+  > i {
+    margin-top: 3px;
+  }
+
+  > div {
+    display: grid;
+    flex: 1;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  strong {
+    font-size: 13px;
+  }
+
+  span {
+    font-size: 12px;
+    line-height: 1.55;
+  }
+}
+
+.conflict-body {
+  display: grid;
+  gap: 12px;
+
+  h4 {
+    margin: 4px 0 0;
+  }
+}
+
+.conflict-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #fff6e4;
+  color: #744600;
+  font-size: 13px;
+  line-height: 1.6;
+
+  > i {
+    margin-top: 2px;
+  }
+}
+
+.conflict-hint {
+  margin: 0;
+  color: #5c7076;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .error {
   color: #b42318;
 }

@@ -1,6 +1,6 @@
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(150px, 1fr));
+  grid-template-columns: repeat(7, minmax(140px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -44,6 +44,46 @@
   grid-template-columns: 0.72fr 1.28fr;
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.reconciliation-panel {
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.reconciliation-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border-top: 1px solid #e0e7e9;
+  border-bottom: 1px solid #e0e7e9;
+  background: #e0e7e9;
+
+  > div {
+    display: grid;
+    gap: 4px;
+    padding: 12px 16px;
+    background: #f9fbfb;
+  }
+
+  span {
+    color: #718188;
+    font-size: 11px;
+  }
+
+  strong {
+    color: #23424b;
+    font-size: 16px;
+  }
+
+  strong.danger {
+    color: #b42318;
+  }
+
+  strong.mono {
+    font-size: 13px;
+  }
 }
 
 .dashboard-grid.lower {

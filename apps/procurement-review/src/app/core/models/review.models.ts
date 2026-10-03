@@ -11,6 +11,9 @@ export type ReviewRole =
   | "chair";
 export type ClarificationStatus = "open" | "responded" | "overdue";
 export type VersionStatus = "draft" | "finalized";
+export type BatchStatus = "pending" | "applied" | "backfilled";
+export type QuarantineKind = "isolated" | "pending_review";
+export type QuarantineStatus = "pending" | "resolved";
 
 export interface ReviewerOpinion {
   id: string;
@@ -21,6 +24,7 @@ export interface ReviewerOpinion {
   score: number;
   comment: string;
   createdAt: string;
+  batchId?: string;
 }
 
 export interface Clarification {
@@ -34,6 +38,7 @@ export interface Clarification {
   dueAt: string;
   respondedAt?: string;
   status: ClarificationStatus;
+  batchId?: string;
 }
 
 export interface SupplierResponse {
@@ -49,6 +54,7 @@ export interface SupplierResponse {
   submittedBy: string;
   submittedAt: string;
   reviewRound: number;
+  revision: number;
   reviews: ReviewerOpinion[];
   clarifications: Clarification[];
 }
@@ -83,6 +89,7 @@ export interface ReviewVersion {
   clauseCount: number;
   responseCount: number;
   contentHash: string;
+  batchId?: string;
 }
 
 export interface AuditLog {
@@ -92,6 +99,53 @@ export interface AuditLog {
   action: string;
   entity: string;
   detail: string;
+  batchId?: string;
+}
+
+export interface AuditBatch {
+  id: string;
+  opId: string;
+  action: string;
+  actor: string;
+  role: ReviewRole;
+  baseRevision: number;
+  status: BatchStatus;
+  entityId: string;
+  resultRevision?: number;
+  createdAt: string;
+  appliedAt?: string;
+}
+
+export interface QuarantineItem {
+  id: string;
+  kind: QuarantineKind;
+  entityType: string;
+  entityId: string;
+  reason: string;
+  detail: string;
+  detectedAt: string;
+  status: QuarantineStatus;
+  resolution?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+}
+
+export interface ReconciliationReport {
+  lastRunAt: string;
+  batchCount: number;
+  replayedBatches: number;
+  backfilledBatches: number;
+  pendingQuarantine: number;
+  quarantine: QuarantineItem[];
+}
+
+export interface RevisionConflict {
+  responseId: string;
+  currentRevision: number;
+  status: ComplianceStatus;
+  reviewRound: number;
+  reviews: ReviewerOpinion[];
+  message: string;
 }
 
 export interface DashboardStats {
@@ -122,6 +176,9 @@ export interface ReviewState {
   auditLogs: AuditLog[];
   dashboard?: DashboardStats;
   suppliers: Supplier[];
+  reconciliation?: ReconciliationReport;
+  batches: AuditBatch[];
+  conflict?: RevisionConflict;
   filters: ClauseFilters;
   role: ReviewRole;
   selectedSupplierIds: string[];
@@ -138,6 +195,8 @@ export interface WorkspaceQueryResult {
     auditLogs: AuditLog[];
     dashboard: DashboardStats;
     suppliers: Supplier[];
+    reconciliation: ReconciliationReport;
+    batches: AuditBatch[];
   };
 }
 
@@ -148,6 +207,8 @@ export interface AssessmentInput {
   comment: string;
   reviewer: string;
   role: ReviewRole;
+  baseRevision: number;
+  opId: string;
 }
 
 export interface ClarificationInput {
@@ -155,18 +216,59 @@ export interface ClarificationInput {
   requestText: string;
   dueAt: string;
   actor: string;
+  role: ReviewRole;
+  baseRevision: number;
+  opId: string;
 }
 
 export interface ClarificationResponseInput {
   clarificationId: string;
   responseText: string;
   actor: string;
+  role: ReviewRole;
+  baseRevision: number;
+  opId: string;
 }
 
 export interface FinalizeVersionInput {
   label: string;
   actor: string;
   role: ReviewRole;
+  opId: string;
+}
+
+export interface ResolveQuarantineInput {
+  quarantineId: string;
+  resolution: string;
+  actor: string;
+  role: ReviewRole;
+  opId: string;
+}
+
+export interface AssessmentPayload {
+  opinion: ReviewerOpinion;
+  batchId: string;
+  revision: number;
+  replayed: boolean;
+}
+
+export interface ClarificationPayload {
+  clarification: Clarification;
+  batchId: string;
+  revision: number;
+  replayed: boolean;
+}
+
+export interface FinalizePayload {
+  version: ReviewVersion;
+  batchId: string;
+  replayed: boolean;
+}
+
+export interface ResolveQuarantinePayload {
+  item: QuarantineItem;
+  batchId: string;
+  replayed: boolean;
 }
 
 export const roleProfiles: Record<ReviewRole, { name: string; label: string }> = {
@@ -195,3 +297,16 @@ export const statusSeverity: Record<ComplianceStatus, string> = {
   clarification: "warn",
   pending: "secondary",
 };
+
+export const quarantineKindLabels: Record<QuarantineKind, string> = {
+  isolated: "隔离",
+  pending_review: "待核",
+};
+
+export const quarantineStatusLabels: Record<QuarantineStatus, string> = {
+  pending: "待处理",
+  resolved: "已修复",
+};
+
+export const createOperationId = (): string =>
+  `OP-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
